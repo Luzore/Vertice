@@ -21,6 +21,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import yaml
 from pydantic import (
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     SecretStr,
@@ -41,6 +42,16 @@ DB_MIN_LESSON_CONFIDENCE = 0.60
 # Principle 2: these can never be removed from the universe exclusions.
 MANDATORY_EXCLUSIONS = frozenset({"leveraged_etf", "inverse_etf"})
 
+
+def _require_hhmm(value: Any) -> Any:
+    # Unquoted YAML times such as 10:30 are read as the integer 630; refuse anything
+    # that is not an explicit "HH:MM" string so that cannot slip through.
+    if not isinstance(value, str) or not _HHMM.match(value):
+        raise ValueError('must be a quoted "HH:MM" string, for example "09:00"')
+    return value
+
+
+HHMMTime = Annotated[time, BeforeValidator(_require_hhmm)]
 Percent = Annotated[float, Field(ge=0, le=100)]
 PositivePercent = Annotated[float, Field(gt=0, le=100)]
 
@@ -136,17 +147,8 @@ class RegimeConfig(_Section):
 class PlanConfig(_Section):
     # The daily plan always lists at least 5 ideas; this can be raised, not lowered.
     min_ideas_listed: int = Field(ge=5)
-    publish_time_et: time
-    recheck_time_et: time
-
-    @field_validator("publish_time_et", "recheck_time_et", mode="before")
-    @classmethod
-    def _quoted_hhmm(cls, value: Any) -> Any:
-        # Unquoted YAML times such as 10:30 are read as the integer 630; refuse
-        # anything that is not an explicit "HH:MM" string so that cannot slip through.
-        if not isinstance(value, str) or not _HHMM.match(value):
-            raise ValueError('must be a quoted "HH:MM" string, for example "09:00"')
-        return value
+    publish_time_et: HHMMTime
+    recheck_time_et: HHMMTime
 
     @model_validator(mode="after")
     def _recheck_after_publish(self) -> PlanConfig:
@@ -233,6 +235,100 @@ class NotifyConfig(_Section):
     repeat_high_alerts_max: int = Field(ge=0)
 
 
+class SourceConfig(_Section):
+    """Limits published by one data provider and how this system treats it."""
+
+    # The provider's own limit; the rate limiter uses only a fraction of it.
+    limit_calls: int = Field(ge=1)
+    limit_period_s: float = Field(gt=0)
+    timeout_s: float = Field(gt=0)
+    # When a critical source fails, the system state becomes PRECAUCIÓN.
+    critical: bool
+    # Overrides data.max_retries for this source.
+    max_retries: int | None = Field(default=None, ge=0, le=10)
+    # Seconds a response may be reused, per dataset. Missing or 0 means no caching.
+    cache_ttl_s: dict[str, int] = Field(default_factory=dict)
+
+    @field_validator("cache_ttl_s")
+    @classmethod
+    def _non_negative_ttls(cls, value: dict[str, int]) -> dict[str, int]:
+        negative = [name for name, ttl in value.items() if ttl < 0]
+        if negative:
+            raise ValueError(f"cache times cannot be negative: {negative}")
+        return value
+
+
+class StaleConfig(_Section):
+    quote_max_age_s: int = Field(gt=0)
+    macro_max_age_trading_days: int = Field(ge=1)
+    # Series published with a longer delay (FRED releases exchange rates weekly).
+    macro_max_age_overrides: dict[str, int] = Field(default_factory=dict)
+
+
+class EconRelease(_Section):
+    """A scheduled economic release tracked through FRED's release calendar."""
+
+    name: str = Field(min_length=1)
+    fred_release_id: int = Field(ge=1)
+    time_et: HHMMTime
+    impact: Literal["high", "medium", "low"]
+
+
+SOURCE_NAMES = (
+    "alpaca",
+    "finnhub",
+    "fred",
+    "sec_edgar",
+    "rss_news",
+    "massive",
+    "banxico",
+    "yahoo",
+    "telegram",
+)
+
+
+# Credentials each source needs before it can be used. Sources with an empty tuple
+# need none.
+SOURCE_SECRETS: dict[str, tuple[str, ...]] = {
+    "alpaca": ("alpaca_api_key", "alpaca_api_secret"),
+    "finnhub": ("finnhub_api_key",),
+    "fred": ("fred_api_key",),
+    "sec_edgar": ("sec_user_agent",),
+    "rss_news": (),
+    "massive": ("massive_api_key",),
+    "banxico": ("banxico_token",),
+    "yahoo": (),
+    "telegram": ("telegram_bot_token", "telegram_chat_id"),
+}
+
+
+class DataConfig(_Section):
+    # Fraction of each provider's limit that the system allows itself to use.
+    rate_limit_utilization: float = Field(gt=0, le=0.8)
+    max_retries: int = Field(ge=0, le=10)
+    backoff_base_s: float = Field(gt=0)
+    backoff_max_s: float = Field(gt=0)
+    slow_ms: int = Field(gt=0)
+    raw_retention_days: int = Field(ge=1)
+    stale: StaleConfig
+    sources: dict[str, SourceConfig]
+    fred_series: list[str] = Field(min_length=1)
+    econ_releases: list[EconRelease]
+    fomc_time_et: HHMMTime
+
+    @model_validator(mode="after")
+    def _consistent(self) -> DataConfig:
+        missing = sorted(set(SOURCE_NAMES) - set(self.sources))
+        unknown = sorted(set(self.sources) - set(SOURCE_NAMES))
+        if missing:
+            raise ValueError(f"sources is missing: {missing}")
+        if unknown:
+            raise ValueError(f"sources has unknown names: {unknown}")
+        if self.backoff_max_s < self.backoff_base_s:
+            raise ValueError("backoff_max_s cannot be lower than backoff_base_s")
+        return self
+
+
 class AppConfig(_Section):
     system: SystemConfig
     capital: CapitalConfig
@@ -247,6 +343,7 @@ class AppConfig(_Section):
     ai: AIConfig
     learning: LearningConfig
     notify: NotifyConfig
+    data: DataConfig
     fomc_dates: list[date]
 
 
@@ -299,22 +396,15 @@ class Secrets(BaseSettings):
             return None
         return value
 
+    def missing_for(self, source: str) -> list[str]:
+        """Names of the .env variables ``source`` still needs. Empty when it is ready."""
+        return [name.upper() for name in SOURCE_SECRETS[source] if getattr(self, name) is None]
+
     def source_status(self) -> dict[str, bool]:
         """Which sources have the credentials they need. Never exposes a value."""
-
-        def present(*fields: SecretStr | None) -> bool:
-            return all(field is not None for field in fields)
-
-        return {
-            "alpaca": present(self.alpaca_api_key, self.alpaca_api_secret),
-            "finnhub": present(self.finnhub_api_key),
-            "fred": present(self.fred_api_key),
-            "sec_edgar": present(self.sec_user_agent),
-            "telegram": present(self.telegram_bot_token, self.telegram_chat_id),
-            "massive": present(self.massive_api_key),
-            "banxico": present(self.banxico_token),
-            "anthropic_api": present(self.anthropic_api_key),
-        }
+        status = {source: not self.missing_for(source) for source in SOURCE_SECRETS}
+        status["anthropic_api"] = self.anthropic_api_key is not None
+        return status
 
     def secret_values(self) -> list[str]:
         """Raw values, only for the log redactor to scrub them from output."""
@@ -340,11 +430,17 @@ def env_path() -> Path:
     return repo_root() / ".env"
 
 
+def data_dir() -> Path:
+    """Where the database and the raw snapshots live."""
+    override = os.environ.get("VERTICE_DATA_DIR")
+    return Path(override).resolve() if override else repo_root() / "data"
+
+
 def database_url() -> str:
     override = os.environ.get("DATABASE_URL")
     if override and override.strip():
         return override.strip()
-    return f"sqlite:///{repo_root() / 'data' / 'vertice.db'}"
+    return f"sqlite:///{data_dir() / 'vertice.db'}"
 
 
 @lru_cache(maxsize=1)

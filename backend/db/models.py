@@ -89,27 +89,39 @@ class Universe(Base):
 
 
 class RawSnapshot(Base):
-    """One raw response from a data source, kept 30 days for replay and audit."""
+    """Index of one raw response from a data source, kept 30 days for replay and audit.
+
+    The response itself is a compressed file under the data directory; keeping it
+    out of the database keeps the daily database backups small.
+    """
 
     __tablename__ = "raw_snapshots"
     __table_args__ = (
         CheckConstraint(_one_of("status", SNAPSHOT_STATUSES), name="status_valid"),
         CheckConstraint("latency_ms IS NULL OR latency_ms >= 0", name="latency_non_negative"),
-        Index("ix_raw_snapshots_source_dataset_as_of", "source", "dataset", "as_of"),
+        Index(
+            "ix_raw_snapshots_source_dataset_key_as_of", "source", "dataset", "request_key", "as_of"
+        ),
         Index("ix_raw_snapshots_fetched_at", "fetched_at"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     source: Mapped[str] = mapped_column(Text, nullable=False)
     dataset: Mapped[str] = mapped_column(Text, nullable=False)
+    # What was asked for (symbols, dates...), so replay can find the same request.
+    request_key: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
     # Clock time the data was requested for (simulated in replay).
     as_of: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
     # Real time the request was made.
     fetched_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
     latency_ms: Mapped[int | None] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(Text, nullable=False)
-    payload: Mapped[Any | None] = mapped_column(JSONText)
-    error: Mapped[str | None] = mapped_column(Text)
+    # Why the status is error, stale or slow; empty when everything went well.
+    message: Mapped[str | None] = mapped_column(Text)
+    # Path of the compressed payload, relative to the raw data directory.
+    payload_path: Mapped[str | None] = mapped_column(Text)
+    payload_sha256: Mapped[str | None] = mapped_column(Text)
+    payload_bytes: Mapped[int | None] = mapped_column(Integer)
 
 
 class BarDaily(Base):

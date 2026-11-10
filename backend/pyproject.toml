@@ -5,6 +5,7 @@ description = "VERTICE: long-only stock idea advisor. Recommends and records; ne
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "alembic>=1.13",
+    "defusedxml>=0.7.1",
     "exchange-calendars>=4.5",
     "fastapi>=0.115",
     "pydantic>=2.7",
@@ -20,6 +21,7 @@ dependencies = [
 dev = [
     "httpx2>=2.0",
     "pytest>=8.0",
+    "pytest-timeout>=2.4.0",
     "ruff>=0.5",
 ]
 
@@ -30,6 +32,8 @@ package = false
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-q --strict-markers"
+# No test should take this long; a hang fails instead of blocking the suite.
+timeout = 60
 # Warnings fail the suite so deprecations in our own code are fixed when they appear.
 filterwarnings = [
     "error",

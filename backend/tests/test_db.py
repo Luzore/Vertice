@@ -73,7 +73,7 @@ def test_database_is_at_the_newest_revision(engine):
     with engine.connect() as connection:
         current = MigrationContext.configure(connection).get_current_revision()
 
-    assert current == migrate.head_revision() == "0001"
+    assert current == migrate.head_revision() == "0002"
 
 
 def test_migrations_can_be_undone(engine, db_url):

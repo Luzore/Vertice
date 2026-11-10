@@ -19,7 +19,7 @@ def test_shipped_config_is_valid():
     assert config.plan.recheck_time_et == time(9, 45)
     assert config.screener.atr_pct_sweet_spot == (2.5, 8.0)
     assert config.ai.max_usd_per_day is None
-    assert config.fomc_dates == []
+    assert config.fomc_dates[0] == date(2026, 12, 9)
 
 
 def _set(data: dict, dotted: str, value) -> dict:
@@ -65,6 +65,12 @@ INVALID_VALUES = [
     ("learning.retire_below", 0.60),
     ("notify.repeat_high_alerts_min", 0),
     ("fomc_dates", ["not-a-date"]),
+    ("data.rate_limit_utilization", 0.95),
+    ("data.rate_limit_utilization", 0),
+    ("data.max_retries", -1),
+    ("data.backoff_max_s", 0.5),
+    ("data.fomc_time_et", 1400),
+    ("data.fred_series", []),
 ]
 
 
@@ -139,7 +145,11 @@ def test_system_starts_without_any_key():
     secrets = settings.get_secrets()
 
     assert secrets.secret_values() == []
-    assert set(secrets.source_status().values()) == {False}
+    # Only the sources that need no credentials are ready.
+    ready = {source for source, ok in secrets.source_status().items() if ok}
+    assert ready == {"rss_news", "yahoo"}
+    assert secrets.missing_for("alpaca") == ["ALPACA_API_KEY", "ALPACA_API_SECRET"]
+    assert secrets.missing_for("rss_news") == []
 
 
 def test_blank_values_count_as_missing(tmp_path):
@@ -202,3 +212,52 @@ def test_database_url_default_and_override(monkeypatch):
 
     monkeypatch.delenv("DATABASE_URL")
     assert settings.database_url().endswith("/data/vertice.db")
+
+
+def test_data_section_of_the_shipped_config():
+    data = load_config(SHIPPED_CONFIG).data
+
+    assert data.rate_limit_utilization == 0.8
+    assert data.raw_retention_days == 30
+    assert data.stale.quote_max_age_s == 120
+    assert (data.sources["alpaca"].limit_calls, data.sources["alpaca"].limit_period_s) == (200, 60)
+    assert (data.sources["finnhub"].limit_calls, data.sources["fred"].limit_calls) == (60, 120)
+    assert (data.sources["sec_edgar"].limit_calls, data.sources["sec_edgar"].limit_period_s) == (
+        10,
+        1,
+    )
+    assert data.sources["massive"].limit_calls == 5
+    assert data.sources["rss_news"].cache_ttl_s == {"google_news": 900, "yahoo_finance": 900}
+    assert [s for s, c in data.sources.items() if c.critical] == ["alpaca", "finnhub", "fred"]
+    assert "VIXCLS" in data.fred_series and "DEXMXUS" in data.fred_series
+    assert [(r.name, r.fred_release_id) for r in data.econ_releases] == [
+        ("CPI", 10),
+        ("Empleo", 50),
+        ("PIB", 53),
+    ]
+    assert data.fomc_time_et == time(14, 0)
+
+
+def test_fomc_dates_of_the_shipped_config_are_wednesdays_in_order():
+    dates = load_config(SHIPPED_CONFIG).fomc_dates
+
+    assert dates == sorted(dates)
+    assert len(dates) >= 8
+    assert {d.weekday() for d in dates} == {2}  # decisions are announced on Wednesdays
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expected"),
+    [
+        (lambda data: data["sources"].pop("fred"), "sources is missing"),
+        (lambda data: data["sources"].update(reddit=data["sources"]["yahoo"]), "unknown names"),
+        (lambda data: data["sources"]["alpaca"]["cache_ttl_s"].update(news=-5), "negative"),
+        (lambda data: data["sources"]["alpaca"].update(limit_calls=0), "limit_calls"),
+        (lambda data: data["econ_releases"][0].update(time_et="8:30"), "HH:MM"),
+    ],
+)
+def test_invalid_data_sources_are_rejected(config_dict, write_config, mutate, expected):
+    mutate(config_dict["data"])
+
+    with pytest.raises(ConfigError, match=expected):
+        load_config(write_config(config_dict))

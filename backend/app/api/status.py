@@ -9,10 +9,11 @@ from fastapi import APIRouter
 from sqlalchemy import text
 
 from app import __version__
+from collectors.health import data_health
 from core import clock, market_calendar, settings
 from core.logging import get_logger
 from db.migrate import head_revision
-from db.session import get_engine
+from db.session import get_engine, session_scope
 
 router = APIRouter()
 log = get_logger(__name__)
@@ -52,4 +53,27 @@ def health() -> dict:
         },
         "market": market_calendar.market_status(moment),
         "database": database,
+    }
+
+
+@router.get("/status/sources")
+def sources() -> dict:
+    """Health of every data source, and whether a critical one is down."""
+    config = settings.get_config()
+    with session_scope(get_engine()) as session:
+        health = data_health(session, config.data)
+    return {
+        "state": health.state,
+        "problems": health.problems,
+        "sources": [
+            {
+                "source": item.source,
+                "critical": item.critical,
+                "status": item.status,
+                "message": item.message,
+                "updated_at": item.updated_at.isoformat() if item.updated_at else None,
+                "datasets": item.datasets,
+            }
+            for item in health.sources
+        ],
     }

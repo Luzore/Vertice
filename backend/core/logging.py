@@ -57,7 +57,7 @@ class SecretRedactor:
         # Longest first, so a secret that contains another is replaced whole.
         self._values = sorted(unique, key=len, reverse=True)
 
-    def _scrub_text(self, text: str) -> str:
+    def scrub_text(self, text: str) -> str:
         for value in self._values:
             if value in text:
                 text = text.replace(value, REDACTED)
@@ -67,7 +67,7 @@ class SecretRedactor:
 
     def _scrub(self, value: Any) -> Any:
         if isinstance(value, str):
-            return self._scrub_text(value)
+            return self.scrub_text(value)
         if isinstance(value, Mapping):
             return {
                 key: REDACTED if _SENSITIVE_NAME.search(str(key)) else self._scrub(item)
@@ -76,17 +76,22 @@ class SecretRedactor:
         if isinstance(value, list | tuple | set | frozenset):
             return [self._scrub(item) for item in value]
         if isinstance(value, bytes):
-            return self._scrub_text(value.decode("utf-8", errors="replace"))
+            return self.scrub_text(value.decode("utf-8", errors="replace"))
         if value is None or isinstance(value, bool | int | float):
             return value
         # Anything else (exceptions, URLs, pydantic models...) is logged as text.
-        return self._scrub_text(str(value))
+        return self.scrub_text(str(value))
 
     def __call__(self, logger: Any, method_name: str, event_dict: dict) -> dict:
         return {
             key: REDACTED if _SENSITIVE_NAME.search(str(key)) else self._scrub(value)
             for key, value in event_dict.items()
         }
+
+
+def scrub_text(text: str, secret_values: Iterable[str] = ()) -> str:
+    """Remove secrets from a text that will be stored or shown (error messages)."""
+    return SecretRedactor(secret_values).scrub_text(text)
 
 
 def _add_simulated_time(logger: Any, method_name: str, event_dict: dict) -> dict:

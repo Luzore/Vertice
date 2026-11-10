@@ -44,6 +44,11 @@ Cualquier cambio de código que rompa estas reglas es un bug, aunque "funcione".
 
 - **2026-11-10 · Calendario económico.** Finance Calendar cerró su plan gratuito. Las fechas de CPI, empleo y PIB salen del calendario de publicaciones de FRED, y las fechas FOMC de `fomc_dates` en `config/config.yaml`. No existe `FINCAL_API_KEY` y el enlace de atribución a financecalendar.com deja de ser obligatorio.
 
+- **2026-11-10 · Conexiones en vivo (WebSocket).** En la Fase 1 las noticias y los precios se consultan por REST. El WebSocket de Alpaca (precios y noticias en tiempo real) se construye en la Fase 6 con el vigilante y se verifica en el VPS, porque el entorno de desarrollo en la nube no permite WebSocket.
+- **2026-11-10 · Yahoo Finance.** Es solo un respaldo opcional del VIX intradía y nunca es fuente crítica: si falla, se usa el VIX diario de FRED.
+- **2026-11-10 · Cliente HTTP.** Se usa `httpx2`, el sucesor de `httpx` que nombra el ROADMAP.
+- **2026-11-10 · Respuestas crudas.** Se guardan 30 días como archivos comprimidos en `data/raw/`; la tabla `raw_snapshots` es su índice. Así los respaldos diarios de la base se mantienen pequeños.
+
 ## Comandos
 
 Desde la raíz del repo (requiere `uv` y `make`):
@@ -53,9 +58,12 @@ Desde la raíz del repo (requiere `uv` y `make`):
 - `make lint`: revisa estilo y errores comunes con ruff.
 - `make migrate`: crea o actualiza la base de datos.
 - `make dev`: levanta la API en http://127.0.0.1:8000 con recarga automática.
+- `make check`: prueba cada fuente de datos con una llamada real y muestra estado y latencia.
 
 Los módulos del backend se ejecutan desde `backend/` (por ejemplo `cd backend && uv run python -m collectors.check`).
 
 ## Nota del entorno de desarrollo en la nube
 
+- El entorno en la nube no permite conexiones WebSocket ni puertos distintos de HTTPS: el streaming de Alpaca no se puede probar ahí.
+- Yahoo Finance responde 429 desde este entorno; es esperado y no cuenta como fallo.
 - El entorno de Claude Code en la nube guarda una copia del Secret de Alpaca y la pone en el header `APCA-API-SECRET-KEY` de toda llamada a `data.alpaca.markets`, por encima del valor de `.env`. Si se regenera la key de Alpaca hay que actualizar también esa copia; si no, ese host responde 401 aunque `.env` esté bien. En el VPS esto no aplica: ahí solo cuenta `.env`.

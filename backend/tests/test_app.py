@@ -29,7 +29,7 @@ def test_health_reports_ok_without_any_api_key(client):
     assert body["system"] == "VERTICE"
     assert body["mode"] == "recommend"
     assert body["clock"] == "real"
-    assert body["database"] == {"status": "ok", "schema_revision": "0001"}
+    assert body["database"] == {"status": "ok", "schema_revision": "0002"}
     assert body["market"] in {"open", "premarket", "closed"}
     assert body["time"]["user_timezone"] == "America/Monterrey"
 
@@ -65,3 +65,45 @@ def test_startup_fails_loudly_on_an_invalid_config(tmp_path, monkeypatch):
 
     with pytest.raises(Exception, match="is invalid"), TestClient(create_app()):
         pass
+
+
+def test_without_keys_the_server_starts_and_marks_sources_as_not_configured(client):
+    response = client.get("/api/status/sources")
+
+    assert response.status_code == 200
+    body = response.json()
+    by_source = {item["source"]: item for item in body["sources"]}
+    for source in ("alpaca", "finnhub", "fred", "sec_edgar", "massive", "banxico", "telegram"):
+        assert by_source[source]["status"] == "not_configured", source
+        assert by_source[source]["message"].startswith("sin configurar: falta ")
+    assert by_source["rss_news"]["status"] == "unknown"  # needs no key; not asked yet
+    assert by_source["alpaca"]["message"] == (
+        "sin configurar: falta ALPACA_API_KEY, ALPACA_API_SECRET"
+    )
+    assert body["state"] == "PRECAUCION"
+    assert any("alpaca sin configurar" in problem for problem in body["problems"])
+    # The health check itself is fine: the system is up, it just lacks data sources.
+    assert client.get("/api/health").json()["status"] == "ok"
+
+
+def test_with_keys_no_source_is_marked_as_not_configured(db_url, monkeypatch):
+    from tests.conftest import TEST_SECRETS
+
+    monkeypatch.setenv("DATABASE_URL", db_url)
+    for name, value in TEST_SECRETS.items():
+        monkeypatch.setenv(name.upper(), value)
+    migrate.upgrade(db_url)
+
+    with TestClient(create_app()) as test_client:
+        body = test_client.get("/api/status/sources").json()
+
+    assert {item["status"] for item in body["sources"]} == {"unknown"}
+    assert body["state"] == "NORMAL"
+    assert body["problems"] == []
+
+
+def test_server_starts_even_if_the_database_is_not_migrated(db_url, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", db_url)
+
+    with TestClient(create_app()) as test_client:
+        assert test_client.get("/api/health").json()["status"] == "degraded"

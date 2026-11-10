@@ -1,6 +1,6 @@
 # VERTICE developer commands. Run `make` to list them.
 .DEFAULT_GOAL := help
-.PHONY: help install migrate dev test lint format
+.PHONY: help install migrate dev test check lint format
 
 BACKEND := backend
 UV_RUN := cd $(BACKEND) && uv run --frozen
@@ -19,6 +19,9 @@ dev: migrate ## Run the API locally with auto-reload on http://127.0.0.1:8000
 
 test: ## Run the whole test suite
 	$(UV_RUN) pytest
+
+check: ## Test every data source with a real request and show its status
+	$(UV_RUN) python -m collectors.check
 
 lint: ## Check code style and common mistakes
 	$(UV_RUN) ruff check .

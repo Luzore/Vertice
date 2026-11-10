@@ -93,4 +93,93 @@ notify:
   repeat_high_alerts_min: 5
   repeat_high_alerts_max: 3
 
-fomc_dates: []              # cárgalas desde federalreserve.gov
+data:
+  rate_limit_utilization: 0.8   # usa como máximo el 80% del límite de cada proveedor
+  max_retries: 4
+  backoff_base_s: 1             # espera inicial entre reintentos; se duplica cada vez
+  backoff_max_s: 60
+  slow_ms: 3000                 # una respuesta más lenta que esto se marca como "lenta"
+  raw_retention_days: 30
+  stale:
+    quote_max_age_s: 120        # en sesión, un precio más viejo que esto es "viejo"
+    macro_max_age_trading_days: 3
+  # limit_calls / limit_period_s = el límite PUBLICADO por el proveedor.
+  # Si un proveedor lo cambia, cámbialo aquí. cache_ttl_s = segundos que se
+  # reutiliza una respuesta, por tipo de dato.
+  sources:
+    alpaca:
+      limit_calls: 200
+      limit_period_s: 60
+      timeout_s: 20
+      critical: true
+      cache_ttl_s: {daily_bars: 600, intraday_bars: 60, latest_quotes: 0, news: 120, assets: 86400, corporate_actions: 21600}
+    finnhub:
+      limit_calls: 60
+      limit_period_s: 60
+      timeout_s: 15
+      critical: true
+      cache_ttl_s: {company_news: 300, earnings_calendar: 3600, earnings_surprises: 21600, basic_financials: 86400, company_profile: 86400, insider_transactions: 21600}
+    fred:
+      limit_calls: 120
+      limit_period_s: 60
+      timeout_s: 15
+      critical: true
+      cache_ttl_s: {series_observations: 3600, release_dates: 43200}
+    sec_edgar:
+      limit_calls: 10
+      limit_period_s: 1
+      timeout_s: 15
+      critical: false
+      cache_ttl_s: {company_tickers: 86400, submissions: 1800}
+    rss_news:               # sin límite publicado: 1 consulta por tema cada 15 min
+      limit_calls: 30
+      limit_period_s: 60
+      timeout_s: 15
+      critical: false
+      cache_ttl_s: {google_news: 900, yahoo_finance: 900}
+    massive:
+      limit_calls: 5
+      limit_period_s: 60
+      timeout_s: 20
+      critical: false
+      cache_ttl_s: {daily_bars: 3600, grouped_daily: 3600}
+    banxico:                # sin límite publicado: valor conservador
+      limit_calls: 30
+      limit_period_s: 60
+      timeout_s: 15
+      critical: false
+      cache_ttl_s: {usd_mxn_fix: 3600}
+    yahoo:                  # no oficial; solo respaldo del VIX intradía
+      limit_calls: 10
+      limit_period_s: 60
+      timeout_s: 10
+      critical: false
+      max_retries: 1        # suele bloquear: no insistir
+      cache_ttl_s: {chart: 600}
+    telegram:
+      limit_calls: 30
+      limit_period_s: 1
+      timeout_s: 10
+      critical: false
+  # Series de FRED: tasas 2 y 10 años, curva 10-2, fondos federales, spread
+  # high-yield, dólar amplio, USD/MXN y VIX diario.
+  fred_series: [DGS2, DGS10, T10Y2Y, DFF, BAMLH0A0HYM2, DTWEXBGS, DEXMXUS, VIXCLS]
+  # Publicaciones de alto impacto; la fecha sale del calendario de FRED.
+  econ_releases:
+    - {name: CPI, fred_release_id: 10, time_et: "08:30", impact: high}
+    - {name: Empleo, fred_release_id: 50, time_et: "08:30", impact: high}
+    - {name: PIB, fred_release_id: 53, time_et: "08:30", impact: high}
+  fomc_time_et: "14:00"
+
+# Días de decisión del FOMC (segundo día de cada reunión), de federalreserve.gov.
+# Las de 2027 son tentativas hasta que la Fed las confirme.
+fomc_dates:
+  - 2026-12-09
+  - 2027-01-27
+  - 2027-03-17
+  - 2027-04-28
+  - 2027-06-09
+  - 2027-07-28
+  - 2027-09-15
+  - 2027-10-27
+  - 2027-12-08
