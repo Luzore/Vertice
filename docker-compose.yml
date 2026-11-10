@@ -1,0 +1,34 @@
+# VERTICE services. Phase 0 runs the backend only; the frontend arrives in Phase 7
+# and Caddy (HTTPS + password) in Phase 9.
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    # Secrets come from .env and are never baked into the image. The file is
+    # optional: without keys the system starts and marks each source as not configured.
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: sqlite:////app/data/vertice.db
+    volumes:
+      - ./config:/app/config:ro
+      - vertice-data:/app/data
+    # Reachable from this machine only. Nothing is public until Phase 9.
+    ports:
+      - "127.0.0.1:8000:8000"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5).status == 200 else 1)"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  vertice-data:

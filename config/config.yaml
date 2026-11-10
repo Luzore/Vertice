@@ -1,0 +1,96 @@
+system:
+  name: VERTICE
+  mode: recommend            # recommend | watch_only | paused
+  aggressiveness: 5          # 1..10 (sección 10)
+  timezone_market: America/New_York
+  timezone_user: America/Monterrey
+
+capital:
+  base_currency: USD
+  cash_usd: 5000             # lo capturas tú y lo actualizas al depositar o retirar
+  show_mxn: true
+  fractional_shares: false
+
+costs:
+  commission_pct: 0.25       # pon la de tu casa de bolsa
+  vat_on_commission_pct: 16
+  slippage_pct: 0.05
+
+universe:
+  exchanges: [NYSE, NASDAQ]
+  sic_only: false
+  sic_list_path: config/sic_universe.csv
+  min_price: 5
+  min_dollar_volume_20d: 20000000
+  min_market_cap: 1000000000
+  exclude: [leveraged_etf, inverse_etf, spac, warrant, otc]
+
+screener:
+  top_n_to_controls: 25
+  max_finalists: 10
+  volatility_preference: 0.7   # 0..1; 1 = favorece las más volátiles
+  atr_pct_sweet_spot: [2.5, 8.0]
+
+regime:
+  vix_bullish_max: 20
+  vix_high_risk_min: 28
+  breadth_bullish_min: 55
+
+plan:
+  min_ideas_listed: 5
+  publish_time_et: "09:00"
+  recheck_time_et: "09:45"
+
+entry:
+  skip_first_minutes: 15
+  order_type: limit
+
+exits:
+  target1_sell_pct: 50
+  move_stop_to_breakeven_after_t1: true
+  trailing_start_r: 1.5
+  trailing_atr_mult: 2.5
+  time_stop_days: 5
+  time_stop_min_r: 0.5
+  hold_through_earnings: false
+
+controls:
+  earnings_block_days: 3
+  macro_event_block_hours: 6
+  max_gap_atr: 2
+  max_extension_atr: 3
+  min_reward_r: 1.5
+  max_sector_positions: 2
+  max_sector_pct: 40
+  max_correlation: 0.80
+  cooldown_days_after_stop: 5
+  daily_loss_stop_pct: 2
+  weekly_loss_stop_pct: 5
+  max_drawdown_pause_pct: 10
+
+ai:
+  enabled: true
+  analyst_model: sonnet
+  news_model: haiku
+  lessons_model: sonnet
+  daily_call_budget: 40
+  reserve_for_positions_pct: 30
+  max_usd_per_day: null      # solo si usas ANTHROPIC_API_KEY
+  timeout_s: 180
+  allow_web_search: false
+  cache_minutes: 30
+
+learning:
+  min_cases: 20              # informativo: el mínimo real está en el CHECK de la base
+  min_forward_cases: 10
+  min_confidence: 0.60
+  retire_below: 0.50
+  max_active_lessons: 15
+  max_new_per_day: 3
+
+notify:
+  telegram: true
+  repeat_high_alerts_min: 5
+  repeat_high_alerts_max: 3
+
+fomc_dates: []              # cárgalas desde federalreserve.gov

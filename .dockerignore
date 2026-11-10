@@ -1,0 +1,17 @@
+# Never send secrets or local state to the Docker build.
+.env
+.env.*
+!.env.example
+.git
+data/
+runs/
+backups/
+**/.venv/
+**/__pycache__/
+**/.pytest_cache/
+**/.ruff_cache/
+**/node_modules/
+frontend/dist/
+*.db
+*.db-wal
+*.db-shm

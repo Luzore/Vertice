@@ -1,0 +1,46 @@
+[project]
+name = "vertice-backend"
+version = "0.1.0"
+description = "VERTICE: long-only stock idea advisor. Recommends and records; never sends orders."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "alembic>=1.13",
+    "exchange-calendars>=4.5",
+    "fastapi>=0.115",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "pyyaml>=6.0",
+    "sqlalchemy>=2.0",
+    "structlog>=24.1",
+    "tzdata>=2024.1",
+    "uvicorn[standard]>=0.30",
+]
+
+[dependency-groups]
+dev = [
+    "httpx2>=2.0",
+    "pytest>=8.0",
+    "ruff>=0.5",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q --strict-markers"
+# Warnings fail the suite so deprecations in our own code are fixed when they appear.
+filterwarnings = [
+    "error",
+    # Raised inside exchange_calendars by pandas; nothing in this project can fix it.
+    "ignore:Series.values returning an ndarray",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["db/migrations/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "DTZ"]
