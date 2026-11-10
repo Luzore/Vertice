@@ -1,0 +1,45 @@
+# CLAUDE.md — VÉRTICE
+
+Especificación completa: `ROADMAP.md`. Este archivo contiene las reglas que se respetan en todas las sesiones.
+
+## Principios no negociables (ROADMAP §3, copiados tal cual)
+
+Cualquier cambio de código que rompa estas reglas es un bug, aunque "funcione".
+
+1. **Cero ejecución.** No existe código que envíe órdenes a un broker. El sistema solo recomienda y registra.
+2. **Solo largo.** Prohibido: venta en corto, margen, opciones, ETFs apalancados o inversos (se excluyen del universo por lista y por nombre).
+3. **Los números los calcula el código.** La IA nunca inventa precios ni métricas. Todo número que devuelva (stop, objetivo, zona de entrada) se valida contra los datos; si se sale de tolerancia, se corrige al nivel válido más cercano o la idea se descarta.
+4. **La IA decide qué; el código decide cuánto.** El tamaño de posición, los límites de exposición y la distancia mínima del stop son deterministas.
+5. **Los controles vetan a la IA, nunca al revés.** Un candidato que falla un control bloqueante no llega a COMPRAR, diga lo que diga la IA.
+6. **Los stops no dependen de la IA.** Si la IA está caída o sin cuota, el vigilante sigue disparando alertas de stop, objetivo y tiempo.
+7. **Una sola fuente de verdad: la base de datos.** Una posición real solo existe si confirmaste la compra. Toda transición de estado se registra con hora y origen (sistema o usuario).
+8. **Todo es auditable.** Cada decisión guarda su dossier completo, la respuesta cruda de la IA, el resultado de cada control y las lecciones aplicadas. Debe poder reproducirse después.
+9. **Las lecciones solo influyen si la base de datos lo permite:** ≥20 casos (≥10 posteriores a la suposición) y confianza ≥0.60, impuesto con una restricción `CHECK`, no con código de aplicación.
+10. **Todo se mide contra un benchmark** (SPY) y contra las recomendaciones "sombra".
+11. **Tiempo:** se guarda en UTC; el calendario de mercado se rige por `America/New_York`; la UI muestra hora de Nueva York y de Monterrey (`America/Monterrey`).
+12. **Secretos solo en `.env`** (en `.gitignore`). Nunca se loguean ni se muestran en la UI.
+13. **Cada fuente de datos tiene** limitador de tasa, caché, reintentos con backoff y detección de datos viejos. Si cae una fuente crítica, el estado pasa a PRECAUCIÓN y la UI dice cuál y por qué.
+14. **Tests por nodo.** Ninguna fase se da por terminada con tests en rojo.
+15. **Modo replay desde el día uno.** Todo el pipeline corre sobre días históricos con un reloj simulado, para probar cambios en minutos y no esperar a que el mercado abra.
+
+## Convenciones del proyecto (ROADMAP §1)
+
+- Interfaz, informes, alertas y razonamientos de la IA: en español.
+- Código, nombres de variables, tablas y commits: en inglés.
+- Nombre de trabajo del sistema: **VÉRTICE** (cámbialo en `config.yaml`).
+- **R** = riesgo inicial por acción (precio de entrada − stop). Ganar "+2R" significa ganar el doble de lo que arriesgaste.
+- **Sombra** = una recomendación que no compraste; el sistema la sigue de forma virtual para medir si sus ideas funcionan.
+- **Dossier** = el paquete de datos ordenados que recibe la IA sobre un candidato.
+
+## Forma de trabajo (ROADMAP §17 y §20)
+
+- Construir por fases, en el orden de la sección 17. No empezar una fase sin el "OK fase N" de la anterior.
+- Al terminar cada fase: correr todos los tests, mostrar cada criterio de aceptación con evidencia (salida de comandos), listar lo pendiente y detenerse.
+- Nunca escribir API keys en el código ni pedirlas en el chat: usar `.env.example`; el usuario llena `.env`.
+- Si algo del roadmap es ambiguo o contradictorio, o una API cambió sus límites o endpoints, preguntar antes de decidir y proponer el ajuste en `config/config.yaml`.
+- La IA del sistema se invoca con `claude -p` en modo headless, salida JSON con `--json-schema`, desde `runs/ai_sandbox/`. En tests se usa siempre la IA simulada.
+- Priorizar que funcione y sea verificable sobre que se vea bonito; el diseño del dashboard llega en la Fase 7.
+
+## Nota del entorno de desarrollo en la nube
+
+- El entorno de Claude Code en la nube guarda una copia del Secret de Alpaca y la pone en el header `APCA-API-SECRET-KEY` de toda llamada a `data.alpaca.markets`, por encima del valor de `.env`. Si se regenera la key de Alpaca hay que actualizar también esa copia; si no, ese host responde 401 aunque `.env` esté bien. En el VPS esto no aplica: ahí solo cuenta `.env`.
