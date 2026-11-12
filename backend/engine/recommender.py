@@ -119,6 +119,11 @@ def market_reading(indicators: IndicatorResult) -> str:
     return " ".join(parts)
 
 
+def worst_case_risk(plan: TradePlan) -> float:
+    """Loss per share if the order fills at the top of the entry zone and the stop is hit."""
+    return plan.entry_max - plan.stop
+
+
 def _size(
     idea: Idea,
     portfolio: Portfolio,
@@ -132,7 +137,10 @@ def _size(
     plan = idea.plan
     capital = portfolio.capital
     risk_budget = capital * profile.risk_pct / 100 * idea.size_multiplier
-    shares = risk_budget / plan.risk_per_share
+    # Risk is measured from the worst fill of the zone (its top), so buying anywhere
+    # inside the zone never risks more than the budget.
+    risk_per_share = worst_case_risk(plan)
+    shares = risk_budget / risk_per_share
     limits = [
         profile.max_position_pct / 100 * capital,
         cash,
@@ -141,7 +149,7 @@ def _size(
     shares = min(shares, max(0.0, min(limits)) / plan.entry_max)
     step = 0.01 if config.capital.fractional_shares else 1.0
     shares = math.floor(shares / step + 1e-9) * step
-    return shares, shares * plan.entry_max, shares * plan.risk_per_share
+    return shares, shares * plan.entry_max, shares * risk_per_share
 
 
 def build_plan(
@@ -278,11 +286,11 @@ def build_plan(
         if shares <= 0:
             step = 0.01 if config.capital.fractional_shares else 1.0
             allowed = portfolio.capital * profile.risk_pct / 100 * idea.size_multiplier
-            if allowed < idea.plan.risk_per_share * step:
+            if allowed < worst_case_risk(idea.plan) * step:
                 # The account is too small for even one share at this risk per idea.
                 why = (
                     f"el riesgo permitido por idea (${allowed:,.2f}) no alcanza para una acción "
-                    f"(riesgo por acción ${idea.plan.risk_per_share:,.2f})"
+                    f"(riesgo por acción ${worst_case_risk(idea.plan):,.2f})"
                 )
             else:
                 why = "COMPRAR si liberas efectivo"

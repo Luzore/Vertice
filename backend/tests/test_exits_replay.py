@@ -374,27 +374,31 @@ def test_replay_follows_each_buy_idea_as_a_shadow_position(played):
 
     assert set(trades) == {"WIN", "LOSE"}
     win = trades["WIN"]
-    # 0.75% of 5,000 is 37.50 of risk; R = 3.2 -> 11 shares, bought at the open of 100.20.
-    assert (win.shares, win.entry_price, win.entry_day) == (11, 100.2, REPLAY_DAYS[0])
+    # 0.75% of 5,000 is 37.50 of risk; worst-case loss per share 100.50 - 96.80 = 3.70
+    # -> 10 shares, bought at the open of 100.20.
+    assert (win.shares, win.entry_price, win.entry_day) == (10, 100.2, REPLAY_DAYS[0])
     assert (win.initial_stop, win.targets) == (96.8, (106.4, 109.6))
     assert [(f.day, f.side, f.price, f.shares) for f in win.fills] == [
-        (REPLAY_DAYS[0], "buy", 100.2, 11),
-        (REPLAY_DAYS[1], "sell", 106.4, 5),  # first target: half, in whole shares
-        (REPLAY_DAYS[2], "sell", 109.6, 6),  # second target: the rest
+        (REPLAY_DAYS[0], "buy", 100.2, 10),
+        (REPLAY_DAYS[1], "sell", 106.4, 5),  # first target: half
+        (REPLAY_DAYS[2], "sell", 109.6, 5),  # second target: the rest
     ]
     assert win.exit_reason == exits.TARGET_2
-    assert win.net_pnl == pytest.approx(87.4 - (1102.2 + 532 + 657.6) * 0.0034)
-    assert win.net_r == pytest.approx(win.net_pnl / (11 * 3.4))
+    assert win.net_pnl == pytest.approx(78.0 - (1002 + 532 + 548) * 0.0034)
+    assert win.net_r == pytest.approx(win.net_pnl / (10 * 3.4))
+    # Bought inside the zone, so the real risk stays within the 37.50 budget.
+    assert win.shares * win.risk_per_share <= 37.5
 
     lose = trades["LOSE"]
     assert (lose.shares, lose.entry_price, lose.exit_reason, lose.exit_day) == (
-        23,
+        20,
         50.1,
         exits.STOP,
         REPLAY_DAYS[1],
     )
     assert lose.fills[-1].price == 48.4  # sold at the stop, under the support of 48.50
-    assert lose.net_r == pytest.approx((-39.1 - (1152.3 + 1113.2) * 0.0034) / (23 * 1.7))
+    assert lose.net_r == pytest.approx((-34.0 - (1002 + 968) * 0.0034) / (20 * 1.7))
+    assert lose.shares * lose.risk_per_share <= 37.5
 
 
 def test_replay_records_what_happened_to_every_idea(played):
@@ -422,9 +426,9 @@ def test_replay_account_and_benchmark(played):
     first, last = played.days[0], played.days[-1]
 
     # End of day 1: cash after both purchases and their costs, positions at the close.
-    cash = 5000 - 1102.2 * 1.0034 - 1152.3 * 1.0034
+    cash = 5000 - 1002 * 1.0034 - 1002 * 1.0034  # 10 at 100.20 and 20 at 50.10
     assert first.cash == pytest.approx(cash)
-    assert first.equity == pytest.approx(cash + 11 * 100.8 + 23 * 50.0)
+    assert first.equity == pytest.approx(cash + 10 * 100.8 + 20 * 50.0)
     assert (first.buy, first.entered, first.open_positions) == (3, 2, 2)
     total = sum(t.net_pnl for t in played.trades)
     assert last.equity == pytest.approx(5000 + total)
@@ -438,9 +442,9 @@ def test_replay_report_has_ideas_shadows_and_the_result_against_spy(played, tmp_
     for section in ("## Resultado contra SPY", "## Ideas", "## Sombras (operaciones virtuales)",
                     "## Controles que más bloquearon", "## Tiempos", "## Cómo leer este reporte"):  # fmt: skip
         assert section in text
-    assert "| Capital final | $5,033 | $5,000 |" in text
-    assert "| Rendimiento | +0.66% | +0.00% |" in text
-    assert "Diferencia contra SPY: +0.66 puntos porcentuales." in text
+    assert "| Capital final | $5,030 | $5,000 |" in text
+    assert "| Rendimiento | +0.60% | +0.00% |" in text
+    assert "Diferencia contra SPY: +0.60 puntos porcentuales." in text
     assert "| Todas | 2 | 50% |" in text
     assert "| alcanzó el objetivo 2 | 1 |" in text and "| saltó el stop | 1 |" in text
     assert "| C19 Enfriamiento | 1 |" in text
