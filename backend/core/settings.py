@@ -135,6 +135,8 @@ class ScreenerConfig(_Section):
 class RegimeConfig(_Section):
     vix_bullish_max: float = Field(gt=0)
     vix_high_risk_min: float = Field(gt=0)
+    # A rise of the VIX larger than this in 5 days is high risk on its own.
+    vix_spike_5d_pct: float = Field(gt=0)
     breadth_bullish_min: Percent
 
     @model_validator(mode="after")

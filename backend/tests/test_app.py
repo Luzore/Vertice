@@ -29,7 +29,7 @@ def test_health_reports_ok_without_any_api_key(client):
     assert body["system"] == "VERTICE"
     assert body["mode"] == "recommend"
     assert body["clock"] == "real"
-    assert body["database"] == {"status": "ok", "schema_revision": "0002"}
+    assert body["database"] == {"status": "ok", "schema_revision": migrate.head_revision()}
     assert body["market"] in {"open", "premarket", "closed"}
     assert body["time"]["user_timezone"] == "America/Monterrey"
 

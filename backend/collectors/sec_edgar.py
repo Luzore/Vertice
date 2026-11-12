@@ -14,10 +14,10 @@ from collectors.base import Collector, RawSnapshot, _Requests, request_key
 TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik:010d}.json"
 
-# Forms that announce new shares for sale (dilution).
-OFFERING_FORMS = frozenset(
-    {"S-1", "S-1/A", "S-3", "S-3/A", "S-3ASR", "424B1", "424B3", "424B4", "424B5"}
-)
+# Forms that announce new shares for sale (dilution): registrations and the final
+# prospectus of an equity deal. 424B2 and FWP are left out on purpose: banks file
+# them daily for structured notes, which are not dilution.
+OFFERING_FORMS = frozenset({"S-1", "S-1/A", "S-3", "S-3/A", "424B4", "424B5"})
 
 
 class SecEdgarCollector(Collector):

@@ -86,6 +86,12 @@ class Universe(Base):
     sic_listed: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("0"))
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("1"))
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    # SEC identifier and industry code; the sector ETF is derived from the SIC code.
+    cik: Mapped[int | None] = mapped_column(Integer)
+    sic: Mapped[int | None] = mapped_column(Integer)
+    sector_etf: Mapped[str | None] = mapped_column(Text)
+    market_cap_usd: Mapped[float | None] = mapped_column(Float)
+    profile_updated_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
 
 class RawSnapshot(Base):

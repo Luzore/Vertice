@@ -49,6 +49,10 @@ Cualquier cambio de código que rompa estas reglas es un bug, aunque "funcione".
 - **2026-11-10 · Cliente HTTP.** Se usa `httpx2`, el sucesor de `httpx` que nombra el ROADMAP.
 - **2026-11-10 · Respuestas crudas.** Se guardan 30 días como archivos comprimidos en `data/raw/`; la tabla `raw_snapshots` es su índice. Así los respaldos diarios de la base se mantienen pequeños.
 
+- **2026-11-11 · Sentimiento de noticias sin IA.** Un clasificador por reglas (listas de palabras) puntúa los titulares de −1 a +1 y marca las noticias graves del control C21. Es el que funciona sin cuota de IA; el clasificador con IA de la Fase 4 lo refina.
+- **2026-11-11 · Sector de cada empresa.** Sale del código SIC que publica la SEC, mapeado a los 11 ETFs sectoriales. Es una aproximación a la clasificación GICS de esos ETFs.
+- **2026-11-11 · Universo y capitalización.** El universo se filtra por tipo de valor, precio y liquidez. La capitalización mínima (control C05) se revisa después, solo para los candidatos, porque cuesta una llamada a Finnhub por empresa.
+
 ## Comandos
 
 Desde la raíz del repo (requiere `uv` y `make`):
@@ -59,6 +63,7 @@ Desde la raíz del repo (requiere `uv` y `make`):
 - `make migrate`: crea o actualiza la base de datos.
 - `make dev`: levanta la API en http://127.0.0.1:8000 con recarga automática.
 - `make check`: prueba cada fuente de datos con una llamada real y muestra estado y latencia.
+- `make data`: descarga el universo, 2 años de barras diarias y los datos macro (tarda varios minutos).
 
 Los módulos del backend se ejecutan desde `backend/` (por ejemplo `cd backend && uv run python -m collectors.check`).
 

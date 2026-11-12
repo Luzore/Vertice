@@ -34,6 +34,7 @@ screener:
 regime:
   vix_bullish_max: 20
   vix_high_risk_min: 28
+  vix_spike_5d_pct: 25         # una subida del VIX mayor a esto en 5 días es riesgo alto
   breadth_bullish_min: 55
 
 plan:

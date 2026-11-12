@@ -1,6 +1,6 @@
 # VERTICE developer commands. Run `make` to list them.
 .DEFAULT_GOAL := help
-.PHONY: help install migrate dev test check lint format
+.PHONY: help install migrate dev test check data lint format
 
 BACKEND := backend
 UV_RUN := cd $(BACKEND) && uv run --frozen
@@ -22,6 +22,9 @@ test: ## Run the whole test suite
 
 check: ## Test every data source with a real request and show its status
 	$(UV_RUN) python -m collectors.check
+
+data: ## Download universe, two years of daily bars and macro data (takes minutes)
+	$(UV_RUN) python -m engine.ingest all
 
 lint: ## Check code style and common mistakes
 	$(UV_RUN) ruff check .
