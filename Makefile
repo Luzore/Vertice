@@ -1,6 +1,6 @@
 # VERTICE developer commands. Run `make` to list them.
 .DEFAULT_GOAL := help
-.PHONY: help install migrate dev test check data lint format
+.PHONY: help install migrate dev test check data replay lint format
 
 BACKEND := backend
 UV_RUN := cd $(BACKEND) && uv run --frozen
@@ -25,6 +25,9 @@ check: ## Test every data source with a real request and show its status
 
 data: ## Download universe, two years of daily bars and macro data (takes minutes)
 	$(UV_RUN) python -m engine.ingest all
+
+replay: ## Replay past days: make replay FROM=2026-05-01 TO=2026-10-30
+	$(UV_RUN) python -m replay --from $(FROM) --to $(TO)
 
 lint: ## Check code style and common mistakes
 	$(UV_RUN) ruff check .

@@ -12,6 +12,7 @@ from functools import lru_cache
 from typing import Literal
 
 import exchange_calendars as xcals
+import numpy as np
 import pandas as pd
 
 from core import clock
@@ -110,6 +111,28 @@ def trading_days_between(start: date, end: date) -> list[date]:
     _check_bounds(end)
     sessions = _nyse().sessions_in_range(pd.Timestamp(start), pd.Timestamp(end))
     return [_to_date(stamp) for stamp in sessions]
+
+
+@lru_cache(maxsize=1)
+def _session_ordinals() -> np.ndarray:
+    return np.array([stamp.toordinal() for stamp in _nyse().sessions], dtype=np.int64)
+
+
+def count_trading_days(start: date, end: date) -> int:
+    """How many trading days there are from ``start`` to ``end``, both included.
+
+    Same answer as ``len(trading_days_between(start, end))`` but fast enough to call
+    thousands of times per run.
+    """
+    if end < start:
+        return 0
+    _check_bounds(start)
+    _check_bounds(end)
+    ordinals = _session_ordinals()
+    return int(
+        np.searchsorted(ordinals, end.toordinal(), side="right")
+        - np.searchsorted(ordinals, start.toordinal(), side="left")
+    )
 
 
 def market_status(moment: datetime | None = None) -> MarketStatus:

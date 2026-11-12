@@ -403,6 +403,8 @@ def daily_metrics(
         m["obv_slope_20d"] = _ratio(linear_slope(obv(c, v)[-20:]), mean_volume)
     else:
         m["obv_slope_20d"] = NAN
+    # Volume of the last 3 sessions against the 20-day average: below 1 is a quiet pullback.
+    m["pullback_volume_ratio"] = _ratio(v[-3:].mean(), v[-20:].mean()) if size >= 20 else NAN
     m["mfi_14"], m["cmf_20"] = _last(mfi(h, low_, c, v, 14)), _last(cmf(h, low_, c, v, 20))
     if size >= 21:
         change = np.diff(c[-21:])
@@ -430,6 +432,8 @@ def daily_metrics(
         float(squeezed[-10:].any()) if size >= 10 and not math.isnan(keltner_upper[-1]) else NAN
     )
     m["range_vs_atr"] = _ratio(h[-1] - low_[-1], atr_value)
+    # Where the close sits in the day's range: 1 at the high, 0 at the low.
+    m["close_position_in_range"] = _ratio(close - low_[-1], h[-1] - low_[-1])
     m["gap_pct"] = (_ratio(o[-1], c[-2]) - 1) * 100 if size >= 2 else NAN
     m["gap_atr"] = _ratio(o[-1] - c[-2], atr_line[-2]) if size >= 2 else NAN
     m["beta_60d"] = NAN
@@ -443,6 +447,7 @@ def daily_metrics(
     m["donchian_high_20"] = float(h[-20:].max()) if size >= 20 else NAN
     m["donchian_low_20"] = float(low_[-20:].min()) if size >= 20 else NAN
     m["prior_high_20d"] = float(h[-21:-1].max()) if size >= 21 else NAN
+    m["prior_close_max_20d"] = float(c[-21:-1].max()) if size >= 21 else NAN
     year = min(size, TRADING_DAYS_PER_YEAR)
     m["dist_52w_high_pct"] = (_ratio(close, h[-year:].max()) - 1) * 100 if size >= 60 else NAN
     m["high_52w"] = float(h[-year:].max())
@@ -492,6 +497,7 @@ def event_metrics(
     today = clock.market_date(as_of)
     m = {
         "days_to_earnings": NAN,
+        "days_since_earnings": NAN,
         "eps_surprise_pct": NAN,
         "news_sentiment_24h": NAN,
         "news_sentiment_72h": NAN,
@@ -507,8 +513,21 @@ def event_metrics(
         and e.event_date >= today
     )
     if scheduled:
-        sessions = market_calendar.trading_days_between(today, scheduled[0])
-        m["days_to_earnings"] = float(max(0, len(sessions) - (1 if sessions[:1] == [today] else 0)))
+        # Sessions after today up to the report day; 0 when it reports today.
+        ahead = market_calendar.count_trading_days(today + timedelta(days=1), scheduled[0])
+        m["days_to_earnings"] = float(ahead)
+    reported = sorted(
+        e.event_date
+        for e in events
+        if e.event_type == "earnings"
+        and e.payload.get("kind") == "scheduled"
+        and e.event_date < today
+    )
+    if reported:
+        # Sessions after the report day up to today.
+        m["days_since_earnings"] = float(
+            market_calendar.count_trading_days(reported[-1] + timedelta(days=1), today)
+        )
     surprises = [
         e for e in events if e.event_type == "earnings" and e.payload.get("kind") == "surprise"
     ]
@@ -523,7 +542,7 @@ def event_metrics(
         if event.event_type == "offering" and 0 <= age <= 30:
             m["recent_offering"] = 1.0
 
-    own = [item for item in news if ticker in item.tickers and item.published_at <= as_of]
+    own = [item for item in news if item.published_at <= as_of and ticker in item.tickers]
     for hours in (24, 72):
         scores = [
             item.sentiment
@@ -688,6 +707,11 @@ def compute_indicators(state: MarketState, regime_config: RegimeConfig) -> Indic
             close = bars["close"].to_numpy(dtype=float)
             sector_trend[etf] = float(close[-1] > _last(sma(close, 50)))
 
+    news_by_ticker: dict[str, list[NewsItem]] = {}
+    for item in state.news:
+        for ticker in item.tickers:
+            news_by_ticker.setdefault(ticker, []).append(item)
+
     rows: dict[str, dict[str, float]] = {}
     levels: dict[str, Levels] = {}
     above_sma50: list[bool] = []
@@ -703,7 +727,12 @@ def compute_indicators(state: MarketState, regime_config: RegimeConfig) -> Indic
         metrics["sector_trend"] = sector_trend.get(sector_etf, NAN) if sector_etf else NAN
         metrics.update(intraday_metrics(state.intraday.get(ticker), state.as_of))
         metrics.update(
-            event_metrics(ticker, state.as_of, state.corporate_events.get(ticker, []), state.news)
+            event_metrics(
+                ticker,
+                state.as_of,
+                state.corporate_events.get(ticker, []),
+                news_by_ticker.get(ticker, []),
+            )
         )
         quality = state.quality.get(ticker)
         metrics["data_quality"] = quality.score if quality else NAN

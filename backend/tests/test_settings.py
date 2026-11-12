@@ -19,7 +19,7 @@ def test_shipped_config_is_valid():
     assert config.plan.recheck_time_et == time(9, 45)
     assert config.screener.atr_pct_sweet_spot == (2.5, 8.0)
     assert config.ai.max_usd_per_day is None
-    assert config.fomc_dates[0] == date(2026, 12, 9)
+    assert date(2026, 12, 9) in config.fomc_dates
 
 
 def _set(data: dict, dotted: str, value) -> dict:

@@ -11,7 +11,7 @@ Es un experimento educativo y medible, no asesoría financiera. La especificaci�
 | 0 | Cimientos: configuración, base de datos, reloj, calendario NYSE, logging | Terminada |
 | 1 | Colectores de datos: Alpaca, Finnhub, FRED, SEC, RSS, calendario económico | Terminada |
 | 2 | Motor de datos e indicadores: universo, datos normalizados, 62 métricas, régimen | Terminada |
-| 3 | Filtro, controles y modo replay | Pendiente |
+| 3 | Filtro, 22 controles, Plan del día por reglas y modo replay | Terminada |
 | 4 | Analista IA | Pendiente |
 | 5 | Riesgo, Plan del día y confirmaciones | Pendiente |
 | 6 | Vigilante y alertas | Pendiente |
@@ -58,6 +58,7 @@ Muestra el estado y la latencia de cada fuente. Las que no tienen key salen como
 - `backend/core/`: configuración, reloj (real o simulado), calendario NYSE y logging.
 - `backend/collectors/`: un colector por fuente, con límite de llamadas, caché, reintentos y detección de datos viejos. Los límites de cada proveedor están en la sección `data` de `config.yaml`.
 - `backend/engine/`: universo, motor de datos (sin datos del futuro), indicadores y régimen del día.
+- `backend/replay/`: corre días pasados con reloj simulado y compara el resultado con SPY.
 - `backend/db/`: tablas y migraciones. La base vive en `data/vertice.db`.
 - `data/raw/`: respuestas crudas de las fuentes, comprimidas, por 30 días.
 - `backend/tests/`: tests de cada pieza.

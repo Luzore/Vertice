@@ -2,7 +2,8 @@
 
 This is the classifier that works without the AI: it scores a headline from
 -1 to +1 with word lists and flags the news that control C21 blocks on
-(regulatory investigation, bankruptcy, share offering, sharp downgrade). The AI
+(regulatory investigation, bankruptcy, share offering, sharp downgrade) and the
+special situations of control C22 (trading halt, merger at a fixed price). The AI
 classifier of Phase 4 refines these scores; when the AI is out of quota this
 one keeps the pipeline running.
 """
@@ -55,8 +56,25 @@ _SEVERE: dict[str, tuple[str, ...]] = {
         "dilutive",
     ),  # fmt: skip
     "downgrade": ("downgrade", "downgrades", "downgraded", "cut to sell", "cut to underperform"),
-    "halt": ("trading halted", "trading halt", "delisting", "delisted"),
 }
+
+# Special situations (control C22): the price no longer moves freely.
+_SPECIAL: dict[str, tuple[str, ...]] = {
+    "halt": ("trading halted", "trading halt", "halts trading", "delisting", "delisted"),
+    "merger": (
+        "to be acquired",
+        "agrees to be acquired",
+        "definitive agreement to be acquired",
+        "merger agreement",
+        "tender offer",
+        "take-private",
+        "going private",
+        "all-cash deal",
+        "per share in cash",
+    ),  # fmt: skip
+}
+SEVERE_CATEGORIES = frozenset(_SEVERE)
+SPECIAL_CATEGORIES = frozenset(_SPECIAL)
 
 
 def _count(text: str, phrases: tuple[str, ...]) -> int:
@@ -73,9 +91,18 @@ def score_headline(headline: str, summary: str | None = None) -> float:
 
 
 def severe_category(headline: str, summary: str | None = None) -> str | None:
-    """Kind of severe news (investigation, bankruptcy, offering, downgrade, halt) or None."""
+    """Kind of severe news (investigation, bankruptcy, offering, downgrade) or None."""
     text = f"{headline} {summary or ''}".lower()
     for category, phrases in _SEVERE.items():
+        if _count(text, phrases):
+            return category
+    return None
+
+
+def special_situation(headline: str, summary: str | None = None) -> str | None:
+    """'halt' or 'merger' when the news describes one (control C22), else None."""
+    text = f"{headline} {summary or ''}".lower()
+    for category, phrases in _SPECIAL.items():
         if _count(text, phrases):
             return category
     return None

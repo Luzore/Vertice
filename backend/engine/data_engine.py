@@ -17,6 +17,7 @@ import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
+from functools import lru_cache
 from typing import Any
 
 import pandas as pd
@@ -100,7 +101,8 @@ def _news_item(**fields: Any) -> NewsItem | None:
     if not headline:
         return None
     summary = (fields.get("summary") or "").strip() or None
-    category = sentiment.severe_category(headline, summary)
+    severe = sentiment.severe_category(headline, summary)
+    category = severe or sentiment.special_situation(headline, summary)
     return NewsItem(
         tickers=tuple(sorted({normalize_ticker(t) for t in fields.get("tickers") or () if t})),
         published_at=fields["published_at"],
@@ -110,7 +112,7 @@ def _news_item(**fields: Any) -> NewsItem | None:
         url=(fields.get("url") or "").strip() or None,
         sentiment=sentiment.score_headline(headline, summary),
         category=category,
-        severe=category is not None,
+        severe=severe is not None,
     )
 
 
@@ -559,6 +561,7 @@ def store_corporate_events(session: Session, events: Iterable[CorporateEvent]) -
 # --- point-in-time readers -----------------------------------------------------------
 
 
+@lru_cache(maxsize=4096)
 def last_completed_session(as_of: datetime) -> date:
     """The latest session that has already closed at ``as_of``."""
     day = clock.market_date(as_of)
@@ -761,6 +764,16 @@ def load_corporate_events(
 # --- data quality ----------------------------------------------------------------------
 
 
+@lru_cache(maxsize=4096)
+def _recent_sessions(expected: date) -> tuple[date, ...]:
+    """The 20 sessions ending at ``expected``."""
+    return tuple(
+        market_calendar.trading_days_between(
+            market_calendar.add_trading_days(expected, -19), expected
+        )
+    )
+
+
 @dataclass(frozen=True)
 class Quality:
     score: float
@@ -788,9 +801,7 @@ def assess_quality(
     if latest < expected:
         score -= 0.3
         issues.append(f"falta la barra del {expected:%Y-%m-%d}; la última es del {latest:%Y-%m-%d}")
-    recent_sessions = market_calendar.trading_days_between(
-        market_calendar.add_trading_days(expected, -19), expected
-    )
+    recent_sessions = _recent_sessions(expected)
     present = {stamp.date() for stamp in bars.index[-25:]}
     missing = [
         day for day in recent_sessions[:-1] if day not in present and day >= bars.index[0].date()
@@ -918,3 +929,130 @@ def build_market_state(
         },
         health=data_health(session, config.data),
     )
+
+
+class MarketDataCache:
+    """Market data loaded once, served point in time.
+
+    Replay asks for the market state of hundreds of moments. Reading the database
+    each time takes seconds; this keeps everything in memory and cuts the slice
+    that was knowable at each moment, with the same rules as the readers above
+    (a test checks both give identical results).
+    """
+
+    def __init__(self, session: Session, config: AppConfig, *, start: date, end: date) -> None:
+        self._config = config
+        horizon = datetime.combine(end + timedelta(days=2), datetime.min.time(), tzinfo=UTC)
+        earliest = datetime.combine(start - timedelta(days=30), datetime.min.time(), tzinfo=UTC)
+        self.universe = load_universe(session, sic_only=config.universe.sic_only)
+        tickers = [*self.universe.index, *CONTEXT_TICKERS]
+        # Everything up to the end of the period; state_at() cuts what each moment may see.
+        self.daily = load_daily_bars(
+            session, horizon, tickers, lookback_days=(end - start).days + 800
+        )
+        self.macro = load_macro(session, horizon, lookback_days=(end - start).days + 440)
+        self._events_raw = session.scalars(
+            select(models.CorporateEvent).where(
+                models.CorporateEvent.event_date >= start - timedelta(days=130)
+            )
+        ).all()
+        self._event_records: dict[str, list[tuple[models.CorporateEvent, CorporateEvent]]] = {}
+        for row in self._events_raw:
+            record = CorporateEvent(
+                ticker=row.ticker,
+                event_type=row.event_type,
+                event_date=row.event_date,
+                event_at=row.event_at,
+                payload=row.payload or {},
+                source=row.source,
+                url=row.url,
+            )
+            self._event_records.setdefault(row.ticker, []).append((row, record))
+        self._news = load_news(session, horizon, days=(horizon - earliest).days)
+        self._econ = [
+            EconEvent(
+                name=r.name,
+                country=r.country,
+                scheduled_at=r.scheduled_at,
+                impact=r.impact,
+                source=r.source,
+            )
+            for r in session.scalars(
+                select(models.EconEvent).order_by(models.EconEvent.scheduled_at)
+            ).all()
+        ]
+        self._health = data_health(session, config.data)
+
+    def bars_until(
+        self, ticker: str, last: date, *, lookback_days: int = 760
+    ) -> pd.DataFrame | None:
+        bars = self.daily.get(ticker)
+        if bars is None:
+            return None
+        stop = bars.index.searchsorted(pd.Timestamp(last), side="right")
+        start = bars.index.searchsorted(
+            pd.Timestamp(last - timedelta(days=lookback_days)), side="left"
+        )
+        return bars.iloc[start:stop] if stop > start else None
+
+    def bar_on(self, ticker: str, day: date) -> pd.Series | None:
+        """The full bar of one session. For simulating what happened next, never for deciding."""
+        bars = self.daily.get(ticker)
+        stamp = pd.Timestamp(day)
+        if bars is None or stamp not in bars.index:
+            return None
+        return bars.loc[stamp]
+
+    def events_for(
+        self, ticker: str, as_of: datetime, *, lookback_days: int = 120
+    ) -> list[CorporateEvent]:
+        oldest = clock.market_date(as_of) - timedelta(days=lookback_days)
+        return [
+            record
+            for row, record in self._event_records.get(ticker, [])
+            if row.event_date >= oldest and _event_known(row, as_of)
+        ]
+
+    def state_at(self, as_of: datetime, tickers: Iterable[str] | None = None) -> MarketState:
+        """The market state at ``as_of``; ``tickers`` limits the universe (benchmarks stay)."""
+        as_of = clock.ensure_utc(as_of)
+        last = last_completed_session(as_of)
+        today = clock.market_date(as_of)
+        universe = (
+            self.universe
+            if tickers is None
+            else self.universe.loc[[t for t in self.universe.index if t in set(tickers)]]
+        )
+        daily = {}
+        for ticker in [*universe.index, *CONTEXT_TICKERS]:
+            bars = self.bars_until(ticker, last)
+            if bars is not None:
+                daily[ticker] = bars
+        macro = {}
+        for series_id, series in self.macro.items():
+            visible = series[
+                (series.index < pd.Timestamp(today))
+                & (series.index >= pd.Timestamp(today - timedelta(days=400)))
+            ]
+            if len(visible):
+                macro[series_id] = visible
+        day_start = clock.market_time(today, datetime.min.time())
+        events = {}
+        for ticker in universe.index:
+            known = self.events_for(ticker, as_of)
+            if known:
+                events[ticker] = known
+        return MarketState(
+            as_of=as_of,
+            session_date=last,
+            universe=universe,
+            daily=daily,
+            macro=macro,
+            econ_events=[
+                e for e in self._econ if day_start <= e.scheduled_at <= as_of + timedelta(days=30)
+            ],
+            corporate_events=events,
+            news=[n for n in self._news if as_of - timedelta(days=15) <= n.published_at <= as_of],
+            quality={ticker: assess_quality(daily.get(ticker), as_of) for ticker in universe.index},
+            health=self._health,
+        )

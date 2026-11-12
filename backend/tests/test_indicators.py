@@ -443,12 +443,14 @@ EXPECTED_DAILY_METRICS = {
     "rs_20d_vs_spy", "rs_60d_vs_spy", "rs_20d_vs_sector",
     # volume
     "rvol_20d", "dollar_volume_20d", "obv_slope_20d", "mfi_14", "cmf_20",
-    "up_down_volume_ratio_20d",
+    "up_down_volume_ratio_20d", "pullback_volume_ratio",
     # volatility
     "atr_14", "atr_pct", "realized_vol_10d", "realized_vol_20d", "bb_percent_b", "bb_width",
-    "squeeze", "squeeze_recent", "range_vs_atr", "gap_pct", "gap_atr", "beta_60d",
+    "squeeze", "squeeze_recent", "range_vs_atr", "close_position_in_range", "gap_pct", "gap_atr",
+    "beta_60d",
     # levels
-    "donchian_high_20", "donchian_low_20", "prior_high_20d", "dist_52w_high_pct", "high_52w",
+    "donchian_high_20", "donchian_low_20", "prior_high_20d", "prior_close_max_20d",
+    "dist_52w_high_pct", "high_52w",
     "low_52w", "extension_atr", "nearest_support", "nearest_resistance",
 }  # fmt: skip
 
@@ -505,6 +507,9 @@ def test_daily_metrics_on_a_series_with_known_answers():
     assert m["donchian_high_20"] == approx(400.0)
     assert m["donchian_low_20"] == approx(379.0)
     assert m["prior_high_20d"] == approx(399.0)
+    assert m["prior_close_max_20d"] == approx(398.0)  # yesterday's close was the highest
+    assert m["pullback_volume_ratio"] == approx((1000 + 1000 + 2000) / 3 / 1050)
+    assert m["close_position_in_range"] == approx(0.5)  # closes in the middle of its range
     assert m["dist_52w_high_pct"] == approx((399 / 400 - 1) * 100)
     assert m["extension_atr"] == approx(9.5 / 2, 1e-9)  # 9.5 above the SMA20, ATR 2
     assert math.isinf(m["up_down_volume_ratio_20d"]) or math.isnan(m["up_down_volume_ratio_20d"])
@@ -782,3 +787,11 @@ def test_high_risk_evidence_wins_over_missing_data():
     regime, _ = ind.classify_regime(_context(spy_above_sma200=0.0, vix_level=NAN), REGIME)
 
     assert regime == "RIESGO_ALTO"
+
+
+def test_days_since_earnings():
+    events = [_event("earnings", date(2026, 8, 4), kind="scheduled"),
+              _event("earnings", date(2026, 11, 9), kind="scheduled")]  # fmt: skip
+
+    assert ind.event_metrics("XYZ", AS_OF, events, [])["days_since_earnings"] == 1.0  # yesterday
+    assert math.isnan(ind.event_metrics("XYZ", AS_OF, [], [])["days_since_earnings"])

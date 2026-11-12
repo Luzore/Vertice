@@ -60,6 +60,11 @@ controls:
   macro_event_block_hours: 6
   max_gap_atr: 2
   max_extension_atr: 3
+  max_spread_pct: 0.30         # C06: diferencia máxima entre compra y venta
+  stop_min_atr: 0.8            # C14: el stop debe quedar entre 0.8 y 3 ATR
+  stop_max_atr: 3
+  high_risk_min_score: 80      # C10: en RIESGO ALTO solo ideas con este puntaje
+  severe_news_hours: 72        # C21 y C22: ventana de noticias graves
   min_reward_r: 1.5
   max_sector_positions: 2
   max_sector_pct: 40
@@ -175,6 +180,13 @@ data:
 # Días de decisión del FOMC (segundo día de cada reunión), de federalreserve.gov.
 # Las de 2027 son tentativas hasta que la Fed las confirme.
 fomc_dates:
+  - 2026-01-28
+  - 2026-03-18
+  - 2026-04-29
+  - 2026-06-17
+  - 2026-07-29
+  - 2026-09-16
+  - 2026-10-28
   - 2026-12-09
   - 2027-01-27
   - 2027-03-17

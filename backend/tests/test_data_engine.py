@@ -244,13 +244,26 @@ def test_headline_sentiment(headline, expected):
         ("Retailer files for Chapter 11 bankruptcy protection", "bankruptcy"),
         ("Biotech announces $200 million public offering of common stock", "offering"),
         ("Analyst downgrades stock to sell", "downgrade"),
-        ("Trading halted pending news", "halt"),
         ("Company launches new product line", None),
         ("Probes into deep space continue", None),  # 'probes' is not 'probe'
     ],
 )
 def test_severe_news_categories(headline, category):
     assert sentiment.severe_category(headline) == category
+
+
+@pytest.mark.parametrize(
+    ("headline", "category"),
+    [
+        ("Trading halted pending news", "halt"),
+        ("Company agrees to be acquired for $54 per share in cash", "merger"),
+        ("Board signs merger agreement with rival", "merger"),
+        ("Company acquires small startup", None),
+    ],
+)
+def test_special_situations(headline, category):
+    assert sentiment.special_situation(headline) == category
+    assert sentiment.severe_category(headline) is None  # not a C21 block by itself
 
 
 # --- news de-duplication -------------------------------------------------------------------

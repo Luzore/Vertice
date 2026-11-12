@@ -53,6 +53,11 @@ Cualquier cambio de código que rompa estas reglas es un bug, aunque "funcione".
 - **2026-11-11 · Sector de cada empresa.** Sale del código SIC que publica la SEC, mapeado a los 11 ETFs sectoriales. Es una aproximación a la clasificación GICS de esos ETFs.
 - **2026-11-11 · Universo y capitalización.** El universo se filtra por tipo de valor, precio y liquidez. La capitalización mínima (control C05) se revisa después, solo para los candidatos, porque cuesta una llamada a Finnhub por empresa.
 
+- **2026-11-12 · Puntaje del filtro.** El ROADMAP dice qué da el máximo de cada componente; el crédito parcial se definió en `backend/engine/screener.py` con reglas simples (sí/no o una línea recta entre nada y todo).
+- **2026-11-12 · Fechas de resultados históricas.** Salen de los 8-K con el ítem 2.02 que publica la SEC, porque Finnhub gratis solo da un mes hacia atrás. Los bancos grandes presentan tantos filings que su historia queda incompleta.
+- **2026-11-12 · Spread sin precio en vivo.** El control C06 usa una estimación a partir del precio y la liquidez cuando no hay cotización; es una aproximación.
+- **2026-11-12 · Replay.** No escribe en la base: deja su reporte y sus CSV en `runs/replay/`. El universo, la capitalización y el sector son los de hoy, lo que favorece los resultados pasados; el reporte lo dice.
+
 ## Comandos
 
 Desde la raíz del repo (requiere `uv` y `make`):
@@ -64,6 +69,7 @@ Desde la raíz del repo (requiere `uv` y `make`):
 - `make dev`: levanta la API en http://127.0.0.1:8000 con recarga automática.
 - `make check`: prueba cada fuente de datos con una llamada real y muestra estado y latencia.
 - `make data`: descarga el universo, 2 años de barras diarias y los datos macro (tarda varios minutos).
+- `make replay FROM=2026-05-01 TO=2026-10-30`: corre el sistema sobre días pasados con reloj simulado y deja un reporte en `runs/replay/`.
 
 Los módulos del backend se ejecutan desde `backend/` (por ejemplo `cd backend && uv run python -m collectors.check`).
 

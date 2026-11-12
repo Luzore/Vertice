@@ -180,6 +180,11 @@ class ControlsConfig(_Section):
     macro_event_block_hours: float = Field(ge=0)
     max_gap_atr: float = Field(gt=0)
     max_extension_atr: float = Field(gt=0)
+    max_spread_pct: float = Field(gt=0)
+    stop_min_atr: float = Field(gt=0)
+    stop_max_atr: float = Field(gt=0)
+    high_risk_min_score: float = Field(ge=0, le=100)
+    severe_news_hours: int = Field(ge=1)
     min_reward_r: float = Field(gt=0)
     max_sector_positions: int = Field(ge=1)
     max_sector_pct: PositivePercent
@@ -191,6 +196,8 @@ class ControlsConfig(_Section):
 
     @model_validator(mode="after")
     def _loss_limits_escalate(self) -> ControlsConfig:
+        if self.stop_min_atr >= self.stop_max_atr:
+            raise ValueError("stop_min_atr must be below stop_max_atr")
         if not (
             self.daily_loss_stop_pct <= self.weekly_loss_stop_pct <= self.max_drawdown_pause_pct
         ):

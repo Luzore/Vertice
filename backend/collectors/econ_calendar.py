@@ -36,17 +36,21 @@ class EconCalendarCollector(Collector):
         ]
 
     async def upcoming(
-        self, *, horizon_days: int = 60, as_of: datetime | None = None
+        self, *, horizon_days: int = 60, history_days: int = 0, as_of: datetime | None = None
     ) -> RawSnapshot:
-        """Events from today to ``horizon_days`` ahead, soonest first."""
+        """Events from today to ``horizon_days`` ahead, soonest first.
+
+        ``history_days`` also includes past events, which replay needs.
+        """
         moment = clock.ensure_utc(as_of) if as_of is not None else clock.now()
-        first = clock.market_date(moment)
-        last = first + timedelta(days=horizon_days)
+        today = clock.market_date(moment)
+        first = today - timedelta(days=history_days)
+        last = today + timedelta(days=horizon_days)
         events = self._fomc_events(first, last)
         snapshot = RawSnapshot(
             source=self.source,
             dataset=DATASET,
-            request_key=f"horizon_days={horizon_days}",
+            request_key=f"horizon_days={horizon_days}&history_days={history_days}",
             as_of=moment,
             fetched_at=datetime.now(UTC),
             status=SnapshotStatus.OK,
