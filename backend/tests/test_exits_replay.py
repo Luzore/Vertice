@@ -6,6 +6,7 @@ from datetime import UTC, date, datetime, time, timedelta
 
 import pandas as pd
 import pytest
+from sqlalchemy import select
 
 from core import clock, market_calendar, settings
 from db import models
@@ -13,8 +14,10 @@ from db.session import session_scope
 from engine import data_engine as de
 from engine import exits
 from engine import indicators as ind
+from engine.ai_analyst import simulated_analyst
 from engine.exits import Bar, ShadowPosition
 from engine.indicators import Levels
+from engine.preview import main as preview_main
 from engine.screener import Candidate
 from replay import report
 from replay.__main__ import main as replay_main
@@ -549,3 +552,77 @@ def test_replay_command_writes_the_report(market, db_url, tmp_path, monkeypatch,
     assert code == 0
     assert "# Replay 2026-11-11 a 2026-11-13" in printed and "Reporte y CSV en:" in printed
     assert {p.name for p in out.iterdir()} == {"report.md", "trades.csv", "ideas.csv", "equity.csv"}
+
+
+# --- replay with the simulated AI ----------------------------------------------------------
+
+
+def test_replay_with_the_simulated_ai_runs_the_whole_ai_path_without_touching_the_database(
+    scripted, played, engine
+):
+    signals = [_signals(REPLAY_DAYS[0], [WIN, LOSE, GAP]), _signals(REPLAY_DAYS[1], [LOSE]),
+               _signals(REPLAY_DAYS[2], [LOSE]), _signals(REPLAY_DAYS[3], [])]  # fmt: skip
+    analyst = simulated_analyst(CONFIG)
+
+    result = simulate(scripted, CONFIG, signals, capital=5000.0, analyst=analyst)
+
+    # The simulated AI mirrors the rules, so the trades are the same as without it.
+    def summary(trades):
+        return [(t.ticker, t.entry_day, t.exit_day, t.exit_reason, round(t.net_pnl, 2))
+                for t in trades]  # fmt: skip
+
+    assert summary(result.trades) == summary(played.trades)
+    assert [d.equity for d in result.days] == pytest.approx([d.equity for d in played.days])
+    assert (result.ai, played.ai) == ("simulated", "none")
+    # One call per day with finalists; the 09:45 recheck reuses the morning's review.
+    first_day = result.plans[REPLAY_DAYS[0]]
+    assert first_day.used_ai and all(not i.no_ai for i in first_day.by_verdict("COMPRAR"))
+    assert result.ai_calls == len(analyst.gateway._ledger.records)  # noqa: SLF001
+    assert 1 <= result.ai_calls <= 3
+    assert result.ai_days == result.ai_calls
+    with session_scope(engine) as session:
+        assert session.scalars(select(models.AICall)).all() == []
+    text = report.render(result)
+    assert f"Veredictos con la IA simulada ({result.ai_calls} consultas" in text
+    assert "**IA simulada**: responde con reglas fijas" in text
+    assert "Veredictos por reglas, sin IA." in report.render(played)
+
+
+def test_replay_of_a_market_with_the_simulated_ai(market):
+    rules = run_replay(market, CONFIG, date(2026, 11, 9), date(2026, 11, 13))
+    simulated = run_replay(market, CONFIG, date(2026, 11, 9), date(2026, 11, 13), ai="simulated")
+
+    assert [(i.day, i.ticker, i.verdict) for i in simulated.ideas] == [
+        (i.day, i.ticker, i.verdict) for i in rules.ideas
+    ]
+    assert simulated.ai_calls <= len(simulated.days)
+    with pytest.raises(ValueError, match="solo acepta"):
+        run_replay(market, CONFIG, date(2026, 11, 9), date(2026, 11, 13), ai="real")
+
+
+def test_replay_command_accepts_the_simulated_ai(market, db_url, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("DATABASE_URL", db_url)
+
+    code = replay_main(["--from", "2026-11-12", "--to", "2026-11-13", "--workers", "1",
+                        "--out", str(tmp_path / "out"), "--ai", "simulated"])  # fmt: skip
+
+    assert code == 0
+    assert "Veredictos con la IA simulada" in capsys.readouterr().out
+    with pytest.raises(SystemExit):
+        replay_main(["--from", "2026-11-12", "--to", "2026-11-13", "--ai", "real"])
+
+
+def test_preview_shows_the_plan_of_a_past_day_and_never_uses_the_real_ai_on_it(
+    market, db_url, monkeypatch, capsys
+):
+    monkeypatch.setenv("DATABASE_URL", db_url)
+
+    code = preview_main(["--date", "2026-11-12", "--ai", "simulated"])
+
+    printed = capsys.readouterr().out
+    assert code == 0
+    assert "Plan del día · jue 12 nov 2026" in printed
+    assert "Consultas IA usadas hoy:" in printed
+    with pytest.raises(SystemExit):
+        preview_main(["--date", "2026-11-12", "--ai", "real"])
+    assert "la IA real no se usa sobre fechas pasadas" in capsys.readouterr().err

@@ -37,6 +37,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--out", default=None, help="carpeta del reporte (por defecto runs/replay/<fecha>)"
     )
+    parser.add_argument(
+        "--ai",
+        choices=("none", "simulated"),
+        default="none",
+        help="'simulated' pasa los finalistas por la IA simulada (la IA real no se usa en replay)",
+    )
     args = parser.parse_args(argv)
     if args.end < args.start:
         parser.error("--to debe ser igual o posterior a --from")
@@ -46,7 +52,13 @@ def main(argv: list[str] | None = None) -> int:
         "WARNING", secret_values=settings.get_secrets().secret_values(), stream=sys.stderr
     )
     result = run_replay(
-        make_engine(), config, args.start, args.end, capital=args.capital, workers=args.workers
+        make_engine(),
+        config,
+        args.start,
+        args.end,
+        capital=args.capital,
+        workers=args.workers,
+        ai=args.ai,
     )
     stamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
     directory = settings.repo_root() / "runs" / "replay" / stamp if args.out is None else args.out

@@ -15,10 +15,20 @@ class Holding:
     last_price: float
     stop: float
     opened_on: date
+    # The stop the position was opened with; ``stop`` may have been raised since.
+    initial_stop: float | None = None
 
     @property
     def market_value(self) -> float:
         return self.shares * self.last_price
+
+    @property
+    def r_now(self) -> float | None:
+        """Open result in R: how many times the initial risk the price has moved."""
+        risk = self.entry_price - (
+            self.initial_stop if self.initial_stop is not None else self.stop
+        )
+        return (self.last_price - self.entry_price) / risk if risk > 0 else None
 
 
 @dataclass(frozen=True)

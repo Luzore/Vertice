@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Hipótesis del día",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["hipotesis"],
+  "properties": {
+    "hipotesis": {
+      "type": "array",
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "statement", "scope", "test", "effect", "min_cases"],
+        "properties": {
+          "kind": { "enum": ["pattern", "own_error", "reasoning"] },
+          "statement": { "type": "string", "minLength": 1 },
+          "scope": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "setup": { "enum": ["RUPTURA", "PULLBACK", "CATALIZADOR", "REBOTE"] },
+              "regime": { "enum": ["ALCISTA", "NEUTRAL", "RIESGO_ALTO"] },
+              "sector_etf": { "type": "string" }
+            }
+          },
+          "test": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["metric", "holds_if"],
+            "properties": {
+              "metric": {
+                "enum": ["hit_stop_before_target", "hit_target_before_stop", "net_r_positive", "net_r_below_minus_half"]
+              },
+              "holds_if": { "enum": ["== true", "== false"] }
+            }
+          },
+          "effect": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type"],
+            "properties": {
+              "type": { "enum": ["dossier_text", "screener_weight", "control"] },
+              "component": {
+                "enum": ["tendencia", "momentum", "volumen", "volatilidad", "catalizador", "calidad_setup"]
+              },
+              "delta": { "type": "number", "minimum": -5, "maximum": 5 },
+              "control_kind": { "enum": ["R", "B"] }
+            }
+          },
+          "min_cases": { "type": "integer", "minimum": 20 }
+        }
+      }
+    }
+  }
+}

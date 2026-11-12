@@ -29,6 +29,7 @@ from core import clock, market_calendar
 from core.settings import AppConfig
 from db.session import session_scope
 from engine import exits
+from engine.ai_analyst import Analyst, simulated_analyst
 from engine.data_engine import MarketDataCache, Quality
 from engine.exits import Bar, ShadowPosition
 from engine.indicators import IndicatorResult, Levels, compute_indicators
@@ -97,6 +98,11 @@ class ReplayResult:
     blockers: Counter = field(default_factory=Counter)
     plans: dict[date, DailyPlan] = field(default_factory=dict)
     load_seconds: float = 0.0
+    # "none" (rule verdicts) or "simulated" (the simulated AI ranks the finalists).
+    ai: str = "none"
+    # Days on which the AI answered, and calls it took.
+    ai_days: int = 0
+    ai_calls: int = 0
 
     @property
     def seconds_per_day(self) -> float:
@@ -269,9 +275,15 @@ def simulate(
     signals: list[DaySignals],
     *,
     capital: float,
+    analyst: Analyst | None = None,
 ) -> ReplayResult:
-    """The sequential part: plans, entries, exits and the account, day by day."""
+    """The sequential part: plans, entries, exits and the account, day by day.
+
+    ``analyst`` is only ever the simulated one: a real AI already knows what the
+    market did on past dates, so a replay with it would measure nothing.
+    """
     result = ReplayResult(start=signals[0].day, end=signals[-1].day, capital=capital)
+    result.ai = "simulated" if analyst is not None else "none"
     account = _Account(capital)
     profile = profile_for(config.system.aggressiveness)
     spy_base: float | None = None
@@ -293,9 +305,15 @@ def simulate(
             )
             portfolio = account.snapshot(day)
             published = build_plan(
-                state, indicators, portfolio, config, candidates=today.candidates
+                state,
+                indicators,
+                portfolio,
+                config,
+                candidates=today.candidates,
+                analyst=analyst,
             )
         result.plans[day] = published
+        result.ai_days += published.used_ai
 
         # 09:45 recheck with the opening prices of the candidates.
         bars = {t: bar for t in tickers if (bar := _bar(data, t, day)) is not None}
@@ -308,6 +326,8 @@ def simulate(
                 config,
                 candidates=today.candidates,
                 opening_prices={t: bars[t].open for t in bars},
+                # The recheck reuses the morning's review: the AI is not asked again.
+                review=published.review,
             )
         final = {idea.ticker: idea for idea in rechecked.ideas}
 
@@ -406,6 +426,8 @@ def simulate(
                 account.settle([fill])
     account.retire_closed()
     result.trades = account.closed
+    if analyst is not None:
+        result.ai_calls = analyst.gateway.calls_made
     return result
 
 
@@ -417,8 +439,12 @@ def run_replay(
     *,
     capital: float | None = None,
     workers: int = 1,
+    ai: str = "none",
 ) -> ReplayResult:
-    """Replay every trading day from ``start`` to ``end``."""
+    """Replay every trading day from ``start`` to ``end``. ``ai`` is "none" for rule
+    verdicts or "simulated" to run the finalists through the simulated AI."""
+    if ai not in ("none", "simulated"):
+        raise ValueError("el replay solo acepta ai='none' o ai='simulated'")
     global _DATA, _CONFIG
     days = market_calendar.trading_days_between(start, end)
     if not days:
@@ -440,6 +466,12 @@ def run_replay(
     else:
         signals = [day_signals(data, config, day) for day in days]
 
-    result = simulate(data, config, signals, capital=capital or config.capital.cash_usd)
+    result = simulate(
+        data,
+        config,
+        signals,
+        capital=capital or config.capital.cash_usd,
+        analyst=simulated_analyst(config) if ai == "simulated" else None,
+    )
     result.load_seconds = load_seconds
     return result

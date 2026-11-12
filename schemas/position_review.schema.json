@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Revisión de una posición",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["ticker", "accion", "motivo", "noticia_grave_confirmada", "nuevo_stop", "confianza"],
+  "properties": {
+    "ticker": { "type": "string", "minLength": 1 },
+    "accion": { "enum": ["MANTENER", "VENDER", "SUBIR_STOP"] },
+    "motivo": { "type": "string", "minLength": 1 },
+    "noticia_grave_confirmada": { "type": "boolean" },
+    "nuevo_stop": { "type": ["number", "null"] },
+    "confianza": { "type": "number", "minimum": 0, "maximum": 1 }
+  }
+}

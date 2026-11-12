@@ -58,6 +58,13 @@ Cualquier cambio de código que rompa estas reglas es un bug, aunque "funcione".
 - **2026-11-12 · Spread sin precio en vivo.** El control C06 usa una estimación a partir del precio y la liquidez cuando no hay cotización; es una aproximación.
 - **2026-11-12 · Replay.** No escribe en la base: deja su reporte y sus CSV en `runs/replay/`. El universo, la capitalización y el sector son los de hoy, lo que favorece los resultados pasados; el reporte lo dice.
 
+- **2026-11-12 · Comando de la IA.** Al comando del ROADMAP se le agregan `--tools ""` (la IA no tiene herramientas: solo lee el dossier), `--setting-sources ""` (sin esto Claude Code lee este `CLAUDE.md` desde `runs/ai_sandbox/`), `--strict-mcp-config` y `--no-session-persistence`. El esquema se envía sin la línea `$schema`, que Claude Code rechaza.
+- **2026-11-12 · Niveles de la IA.** Un nivel se acepta si está a 0.5% o menos de un nivel válido. Si no, se corrige al nivel válido más cercano cuando el error es de hasta 1 ATR; más lejos, la idea se descarta. Un stop solo es válido debajo de un nivel técnico y a la distancia que acepta el control C14.
+- **2026-11-12 · Presupuesto de IA.** Lo que no es revisión de posiciones usa como máximo el 70% de las consultas del día (28 de 40); desde el 90% (36) solo se revisan posiciones; al 100% el estado es SIN CUOTA IA. Los intentos fallidos cuentan; las respuestas reutilizadas de la caché no.
+- **2026-11-12 · Veredicto con IA.** COMPRAR exige que la IA diga COMPRAR, que los controles pasen con los niveles de la IA, y el puntaje y la probabilidad mínimos del perfil de riesgo. Un candidato que no entró entre los finalistas que vio la IA queda como máximo en VIGILAR.
+- **2026-11-12 · Replay con IA.** Solo con la IA simulada, que responde con reglas fijas: prueba el dossier, la validación y el presupuesto, no el criterio de la IA real.
+- **2026-11-12 · Noticias con IA.** La IA puede marcar un titular como grave, pero nunca quitar la marca que pusieron las reglas (alimenta el control C21).
+
 ## Comandos
 
 Desde la raíz del repo (requiere `uv` y `make`):
@@ -69,7 +76,8 @@ Desde la raíz del repo (requiere `uv` y `make`):
 - `make dev`: levanta la API en http://127.0.0.1:8000 con recarga automática.
 - `make check`: prueba cada fuente de datos con una llamada real y muestra estado y latencia.
 - `make data`: descarga el universo, 2 años de barras diarias y los datos macro (tarda varios minutos).
-- `make replay FROM=2026-05-01 TO=2026-10-30`: corre el sistema sobre días pasados con reloj simulado y deja un reporte en `runs/replay/`.
+- `make replay FROM=2026-05-01 TO=2026-10-30`: corre el sistema sobre días pasados con reloj simulado y deja un reporte en `runs/replay/`. Con `AI=simulated` los finalistas pasan por la IA simulada.
+- `make preview`: muestra el plan que saldría con los datos ya descargados. `AI=simulated` usa la IA simulada; `AI=real` consulta a Claude y gasta una consulta del presupuesto diario.
 
 Los módulos del backend se ejecutan desde `backend/` (por ejemplo `cd backend && uv run python -m collectors.check`).
 

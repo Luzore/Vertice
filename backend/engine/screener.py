@@ -106,12 +106,12 @@ def detect_setup(metrics: Mapping[str, float], regime: str) -> tuple[str | None,
         quiet = _value(metrics, "pullback_volume_ratio") < 1.0
         if (retreated or rsi2 < 10) and quiet:
             reason = (
-                "retrocede a su promedio de 20 días"
+                "que retrocede a su promedio de 20 días"
                 if retreated
-                else f"sobreventa de corto plazo (RSI de 2 días en {rsi2:.0f})"
+                else f"con sobreventa de corto plazo (RSI de 2 días en {rsi2:.0f})"
             )
             return "PULLBACK", [
-                f"tendencia alcista que {reason}",
+                f"tendencia alcista {reason}",
                 "el retroceso viene con poco volumen",
             ]
 

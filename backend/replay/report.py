@@ -80,6 +80,28 @@ def _stats_row(label: str, stats: TradeStats) -> list[str]:
     ]
 
 
+def _verdict_source(result: ReplayResult) -> str:
+    if result.ai == "simulated":
+        return (
+            f"Veredictos con la IA simulada ({result.ai_calls} consultas en {result.ai_days} días)."
+        )
+    return "Veredictos por reglas, sin IA."
+
+
+def _verdict_caveat(result: ReplayResult) -> str:
+    if result.ai == "simulated":
+        return (
+            "- **IA simulada**: responde con reglas fijas a partir del dossier. Prueba que el "
+            "dossier, la validación y el presupuesto funcionan; no dice nada del criterio de la "
+            "IA real, que solo se puede medir hacia adelante. Falta el filtro de expectativa "
+            "(Fase 5)."
+        )
+    return (
+        "- **Veredictos por reglas**: falta el criterio de la IA, que solo se puede medir "
+        "hacia adelante, y el filtro de expectativa (Fase 5)."
+    )
+
+
 def render(result: ReplayResult) -> str:
     """The report as Markdown."""
     days = result.days
@@ -99,8 +121,9 @@ def render(result: ReplayResult) -> str:
     lines = [
         f"# Replay {result.start} a {result.end}",
         "",
-        "Veredictos por reglas, sin IA. Cada idea COMPRAR se siguió como sombra con las reglas "
-        "de salida, sobre barras diarias y con comisiones, IVA y deslizamiento.",
+        _verdict_source(result)
+        + " Cada idea COMPRAR se siguió como sombra con las reglas de salida, sobre barras "
+        "diarias y con comisiones, IVA y deslizamiento.",
         "",
         "## Resultado contra SPY",
         "",
@@ -199,8 +222,7 @@ def render(result: ReplayResult) -> str:
         "puntúa y los controles de noticias no bloquean.",
         "- **Barras diarias**: no se conoce el orden dentro del día. Si el stop y un objetivo se "
         "tocaron el mismo día, se asume que primero saltó el stop.",
-        "- **Veredictos por reglas**: falta el criterio de la IA (Fase 4) y el filtro de "
-        "expectativa (Fase 5).",
+        _verdict_caveat(result),
     ]
     return "\n".join(lines) + "\n"
 

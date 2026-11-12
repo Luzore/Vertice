@@ -5,8 +5,16 @@ Turns scored candidates into a ranked list of ideas, each with a verdict
 always lists at least five ideas; when nothing deserves a purchase it says so and
 explains why. Forcing bad purchases to fill the list is forbidden.
 
-This is the plan the system produces without the AI ("solo reglas"). From Phase 4
-the AI ranks the finalists; these rules remain the fallback and the veto.
+Without the AI the verdicts come from rules ("solo reglas"). With it, the
+candidates that pass the blocking controls (the finalists) are sent to the analyst,
+and its validated decisions set the verdict, under three limits that never move:
+
+* the controls run again on the AI's levels and still veto (principle 5);
+* COMPRAR needs the minimum score and the minimum probability of the risk profile;
+* the size of the position is computed here, never by the AI (principle 4).
+
+If the AI is off, out of quota or failing, the plan falls back to the rules and
+every idea is marked "sin IA".
 """
 
 from __future__ import annotations
@@ -21,8 +29,12 @@ import pandas as pd
 from core import clock
 from core.settings import AppConfig
 from engine import controls as ctl
+from engine.ai_analyst import Analyst, AnalystReview
+from engine.ai_validation import AIDecision
 from engine.data_engine import MarketState
+from engine.dossier import Finalist
 from engine.indicators import IndicatorResult, Levels
+from engine.levels import valid_levels
 from engine.portfolio import Portfolio
 from engine.risk_profile import RiskProfile, profile_for
 from engine.schemas import EconEvent
@@ -55,6 +67,8 @@ class Idea:
     # True while the verdict comes from rules only.
     no_ai: bool = True
     metrics: dict[str, float] = field(default_factory=dict)
+    # What the AI said about this idea, once validated; None when it was not asked.
+    ai: AIDecision | None = None
 
 
 @dataclass(frozen=True)
@@ -69,6 +83,12 @@ class DailyPlan:
     # How many tickers were scored and how many had a buy setup.
     screened: int
     with_setup: int
+    # The analyst's review of the finalists; None when no analyst took part.
+    review: AnalystReview | None = None
+
+    @property
+    def used_ai(self) -> bool:
+        return self.review is not None and self.review.used_ai
 
     def by_verdict(self, verdict: str) -> list[Idea]:
         return [idea for idea in self.ideas if idea.verdict == verdict]
@@ -152,6 +172,53 @@ def _size(
     return shares, shares * plan.entry_max, shares * risk_per_share
 
 
+@dataclass(frozen=True)
+class _Evaluated:
+    """A candidate with its rule-based plan and the result of the controls on it."""
+
+    candidate: Candidate
+    name: str
+    sector_etf: str | None
+    context: ctl.ControlContext
+    results: tuple[ctl.ControlResult, ...]
+
+    @property
+    def is_finalist(self) -> bool:
+        return self.candidate.setup is not None and not ctl.is_blocked(self.results)
+
+
+def _rule_verdict(
+    candidate: Candidate,
+    plan: TradePlan | None,
+    profile: RiskProfile,
+    config: AppConfig,
+    opening_price: float | None,
+) -> tuple[str, str, str | None]:
+    """Verdict, reason and watch trigger of a candidate no control blocked."""
+    if config.system.mode != "recommend":
+        return "VIGILAR", "el sistema está en modo solo vigilar: no propone compras", None
+    if candidate.score < profile.min_score - WATCH_MARGIN:
+        reason = f"puntaje {candidate.score:.0f}; el mínimo es {profile.min_score:.0f}"
+        return "NO_HOY", reason, None
+    if candidate.score < profile.min_score:
+        reason = f"puntaje {candidate.score:.0f}, cerca del mínimo de {profile.min_score:.0f}"
+        return "VIGILAR", reason, _watch_trigger(candidate, plan)
+    if opening_price is not None and plan is not None and opening_price > plan.no_chase_above:
+        reason = (
+            f"abrió en ${opening_price:,.2f}, arriba del precio de no perseguir "
+            f"(${plan.no_chase_above:,.2f})"
+        )
+        return "VIGILAR", reason, _watch_trigger(candidate, plan)
+    return "COMPRAR", "", None
+
+
+def _ai_discard_reason(decision: AIDecision) -> str:
+    if decision.discard_reason:
+        return decision.discard_reason
+    why = decision.risks[0] if decision.risks else decision.thesis
+    return f"la IA lo descartó: {why}" if why else "la IA lo descartó"
+
+
 def build_plan(
     state: MarketState,
     indicators: IndicatorResult,
@@ -160,9 +227,16 @@ def build_plan(
     *,
     candidates: Sequence[Candidate] | None = None,
     opening_prices: Mapping[str, float] | None = None,
+    analyst: Analyst | None = None,
+    review: AnalystReview | None = None,
 ) -> DailyPlan:
-    """The plan of the day from rules. ``opening_prices`` is given at the 09:45
-    recheck: an idea that opened above its no-chase price becomes VIGILAR."""
+    """The plan of the day.
+
+    With ``analyst`` the finalists are sent to the AI; ``review`` reuses a review
+    already made (the 09:45 recheck does not ask again). With neither, the verdicts
+    come from rules. ``opening_prices`` is given at the recheck: an idea that
+    opened above its no-chase price becomes VIGILAR.
+    """
     profile = profile_for(config.system.aggressiveness)
     scored = list(candidates) if candidates is not None else screen(indicators, config.screener)
     with_setup = [c for c in scored if c.setup is not None]
@@ -180,7 +254,8 @@ def build_plan(
         for ticker in item.tickers:
             news_by_ticker.setdefault(ticker, []).append(item)
 
-    ideas: list[Idea] = []
+    # First the rules: plan and controls of every candidate.
+    evaluated: list[_Evaluated] = []
     for candidate in selected:
         ticker = candidate.ticker
         row = state.universe.loc[ticker] if ticker in state.universe.index else None
@@ -214,31 +289,90 @@ def build_plan(
             },
             opening_price=opening_prices.get(ticker),
         )
-        results = tuple(ctl.run_controls(context))
-        verdict, reason, trigger = "COMPRAR", "", None
+        evaluated.append(
+            _Evaluated(
+                candidate=candidate,
+                name=str(row["name"]) if row is not None else ticker,
+                sector_etf=sector_etf,
+                context=context,
+                results=tuple(ctl.run_controls(context)),
+            )
+        )
+
+    # Then the AI, on the candidates that no control blocked.
+    if review is None and analyst is not None:
+        finalists = []
+        for item in [e for e in evaluated if e.is_finalist][: config.screener.max_finalists]:
+            ticker = item.candidate.ticker
+            valid = valid_levels(
+                item.candidate.metrics,
+                indicators.levels.get(ticker) or Levels(),
+                config.controls,
+                item.context.plan,
+            )
+            if valid is None:
+                continue
+            finalists.append(
+                Finalist(
+                    candidate=item.candidate,
+                    name=item.name,
+                    sector_etf=item.sector_etf,
+                    plan=item.context.plan,
+                    valid=valid,
+                    controls=item.results,
+                    news=tuple(item.context.news),
+                    events=tuple(state.corporate_events.get(ticker, ())),
+                )
+            )
+        review = analyst.review(state, indicators, portfolio, profile, config, finalists)
+    decisions = review.decisions if review is not None and review.used_ai else None
+
+    ideas: list[Idea] = []
+    for item in evaluated:
+        candidate, ticker = item.candidate, item.candidate.ticker
+        plan, results = item.context.plan, item.results
+        opening = opening_prices.get(ticker)
+        decision = decisions.get(ticker) if decisions is not None else None
+        trigger: str | None = None
         if candidate.setup is None:
             verdict, reason = "NO_HOY", "sin setup de compra"
         elif ctl.is_blocked(results):
             verdict, reason = "NO_HOY", "; ".join(ctl.blocking_reasons(results))
-        elif config.system.mode != "recommend":
-            verdict, reason = "VIGILAR", "el sistema está en modo solo vigilar: no propone compras"
-        elif candidate.score < profile.min_score - WATCH_MARGIN:
-            verdict = "NO_HOY"
-            reason = f"puntaje {candidate.score:.0f}; el mínimo es {profile.min_score:.0f}"
-        elif candidate.score < profile.min_score:
-            verdict, trigger = "VIGILAR", _watch_trigger(candidate, plan)
-            reason = f"puntaje {candidate.score:.0f}, cerca del mínimo de {profile.min_score:.0f}"
-        elif ticker in opening_prices and opening_prices[ticker] > plan.no_chase_above:
-            verdict, trigger = "VIGILAR", _watch_trigger(candidate, plan)
-            reason = (
-                f"abrió en ${opening_prices[ticker]:,.2f}, arriba del precio de no perseguir "
-                f"(${plan.no_chase_above:,.2f})"
-            )
+        elif decisions is None:
+            verdict, reason, trigger = _rule_verdict(candidate, plan, profile, config, opening)
+        elif decision is None:
+            # The AI only sees the best finalists; the rest can be watched, not bought.
+            verdict, reason, trigger = _rule_verdict(candidate, plan, profile, config, opening)
+            if verdict == "COMPRAR":
+                verdict, trigger = "VIGILAR", _watch_trigger(candidate, plan)
+                reason = (
+                    f"no entró entre los {config.screener.max_finalists} finalistas que "
+                    "analizó la IA"
+                )
+        elif decision.plan is None:
+            verdict, reason = "NO_HOY", _ai_discard_reason(decision)
+        else:
+            # The controls run again on the AI's levels, and they still veto.
+            plan = decision.plan
+            results = tuple(ctl.run_controls(replace(item.context, plan=plan)))
+            if ctl.is_blocked(results):
+                verdict, reason = "NO_HOY", "; ".join(ctl.blocking_reasons(results))
+            else:
+                verdict, reason, trigger = _rule_verdict(candidate, plan, profile, config, opening)
+                if verdict == "COMPRAR" and decision.verdict == "VIGILAR":
+                    verdict, reason = "VIGILAR", "la IA pide esperar una confirmación"
+                    trigger = decision.watch_trigger or _watch_trigger(candidate, plan)
+                elif verdict == "COMPRAR" and decision.probability < profile.min_probability:
+                    verdict, trigger = "VIGILAR", _watch_trigger(candidate, plan)
+                    reason = (
+                        f"la IA estima {decision.probability:.0%} de probabilidad de tocar el "
+                        f"objetivo antes que el stop; el mínimo es {profile.min_probability:.0%}"
+                    )
         ideas.append(
             Idea(
                 ticker=ticker,
-                name=str(row["name"]) if row is not None else ticker,
-                sector_etf=sector_etf,
+                name=item.name,
+                sector_etf=item.sector_etf,
                 setup=candidate.setup,
                 score=candidate.score,
                 breakdown=candidate.breakdown,
@@ -249,7 +383,9 @@ def build_plan(
                 notes=tuple(candidate.notes),
                 size_multiplier=ctl.size_multiplier(results),
                 watch_trigger=trigger,
+                no_ai=decision is None,
                 metrics=candidate.metrics,
+                ai=decision,
             )
         )
 
@@ -319,6 +455,7 @@ def build_plan(
         ideas=tuple([*actionable, *rejected[:keep]]),
         screened=len(scored),
         with_setup=len(with_setup),
+        review=review,
     )
 
 
@@ -341,6 +478,11 @@ def render_plan(plan: DailyPlan, config: AppConfig, capital: float) -> str:
         f"{_MONTHS[day.month - 1]} {day.year} · Régimen {plan.regime.replace('_', ' ')}"
     )
     lines = [header, plan.market_reading]
+    review = plan.review
+    if review is not None and review.market_reading:
+        lines.append(f"Lectura de la IA: {review.market_reading}")
+    if review is not None and not review.used_ai and review.note:
+        lines.append(f"Veredictos por reglas ({review.label}): {review.note}.")
     if plan.events_today:
         events = ", ".join(
             f"{e.name} {clock.to_market(e.scheduled_at):%H:%M} NY" for e in plan.events_today
@@ -375,6 +517,21 @@ def render_plan(plan: DailyPlan, config: AppConfig, capital: float) -> str:
             )
         if idea.notes:
             lines.append(f"Por qué: {'; '.join(idea.notes)}")
+        decision = idea.ai
+        if decision is not None and decision.plan is not None and idea.verdict != "NO_HOY":
+            lines.append(
+                f"IA: {decision.probability:.0%} de probabilidad de tocar el objetivo antes que "
+                f"el stop · confianza {decision.confidence:.0%} · horizonte "
+                f"{decision.horizon_days} días"
+            )
+            if decision.thesis:
+                lines.append(f"Tesis: {decision.thesis}")
+            if decision.risks:
+                lines.append(f"Riesgos: {'; '.join(decision.risks)}")
+            if decision.invalidation:
+                lines.append(f"Se invalida si: {decision.invalidation}")
+            if decision.corrections:
+                lines.append(f"Corregido por el código: {'; '.join(decision.corrections)}")
         if idea.reason:
             lines.append(f"{'Motivo' if idea.verdict == 'NO_HOY' else 'Pendiente'}: {idea.reason}")
         if idea.watch_trigger:

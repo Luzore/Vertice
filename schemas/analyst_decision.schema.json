@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Decisión del analista",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["lectura_mercado", "decisiones"],
+  "properties": {
+    "lectura_mercado": { "type": "string", "minLength": 1 },
+    "decisiones": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ticker", "veredicto", "setup", "prob_objetivo_antes_que_stop", "confianza", "entrada",
+          "disparador_vigilar", "stop", "objetivos", "horizonte_dias", "tesis", "razones", "riesgos",
+          "invalidacion", "lecciones_aplicadas", "datos_faltantes"
+        ],
+        "properties": {
+          "ticker": { "type": "string", "minLength": 1 },
+          "veredicto": { "enum": ["COMPRAR", "VIGILAR", "DESCARTAR"] },
+          "setup": { "enum": ["RUPTURA", "PULLBACK", "CATALIZADOR", "REBOTE"] },
+          "prob_objetivo_antes_que_stop": { "type": "number", "minimum": 0, "maximum": 1 },
+          "confianza": { "type": "number", "minimum": 0, "maximum": 1 },
+          "entrada": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["tipo", "zona_min", "zona_max", "no_perseguir_sobre"],
+            "properties": {
+              "tipo": { "enum": ["limite", "stop_limite"] },
+              "zona_min": { "type": "number", "exclusiveMinimum": 0 },
+              "zona_max": { "type": "number", "exclusiveMinimum": 0 },
+              "no_perseguir_sobre": { "type": "number", "exclusiveMinimum": 0 }
+            }
+          },
+          "disparador_vigilar": { "type": ["string", "null"] },
+          "stop": { "type": "number", "exclusiveMinimum": 0 },
+          "objetivos": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": { "type": "number", "exclusiveMinimum": 0 }
+          },
+          "horizonte_dias": { "type": "integer", "minimum": 1, "maximum": 10 },
+          "tesis": { "type": "string", "minLength": 1 },
+          "razones": { "type": "array", "items": { "type": "string" } },
+          "riesgos": { "type": "array", "items": { "type": "string" } },
+          "invalidacion": { "type": "string" },
+          "lecciones_aplicadas": { "type": "array", "items": { "type": "string" } },
+          "datos_faltantes": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    }
+  }
+}

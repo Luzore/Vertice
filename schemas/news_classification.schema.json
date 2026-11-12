@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Clasificación de noticias",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["noticias"],
+  "properties": {
+    "noticias": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "sentimiento", "categoria", "grave"],
+        "properties": {
+          "id": { "type": "integer" },
+          "sentimiento": { "type": "number", "minimum": -1, "maximum": 1 },
+          "categoria": {
+            "enum": [
+              "resultados", "guia", "analistas", "producto", "legal_regulatorio", "quiebra",
+              "oferta_acciones", "fusion_adquisicion", "suspension", "directivos", "macro", "otra"
+            ]
+          },
+          "grave": { "type": "boolean" }
+        }
+      }
+    }
+  }
+}
