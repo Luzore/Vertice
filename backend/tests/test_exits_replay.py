@@ -23,7 +23,6 @@ from replay import report
 from replay.__main__ import main as replay_main
 from replay.engine import DaySignals, run_replay, simulate
 from tests.conftest import SHIPPED_CONFIG
-from tests.test_market_state import _sessions, seed
 
 CONFIG = settings.load_config(SHIPPED_CONFIG)
 EXITS, COSTS = CONFIG.exits, CONFIG.costs
@@ -472,16 +471,6 @@ def test_report_statistics():
 
 
 # --- replay on a whole (synthetic) market --------------------------------------------------------
-
-
-@pytest.fixture
-def market(engine):
-    tickers = [f"T{i:02d}" for i in range(24)]
-    seed(engine, tickers, _sessions(300))
-    with session_scope(engine) as session:
-        for row in session.query(models.Universe).all():
-            row.market_cap_usd = 5e9
-    return engine
 
 
 def test_cache_gives_the_same_state_as_the_database_readers(market):

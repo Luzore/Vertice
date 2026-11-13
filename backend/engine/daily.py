@@ -42,7 +42,7 @@ class NoMarket(Exception):
 @dataclass(frozen=True)
 class CloseSummary:
     day: date
-    # Tickers by what happened to their idea: expired, shadow, not_fillable.
+    # Tickers by what happened to their idea: expired, shadow, not_fillable, repeated.
     ideas: dict[str, list[str]]
     # Shadow ticker -> reasons of the sales the exit rules made today.
     shadow_sales: dict[str, list[str]]
@@ -260,6 +260,7 @@ def main(argv: list[str] | None = None) -> int:
             for label, key in (
                 ("Sombras nuevas", "shadow"),
                 ("No ejecutables", "not_fillable"),
+                ("Repetidas (ya tienen una sombra abierta)", "repeated"),
                 ("Sin respuesta", "expired"),
             ):
                 print(f"{label}: {', '.join(summary.ideas.get(key, [])) or 'ninguna'}")

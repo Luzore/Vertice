@@ -525,8 +525,22 @@ def settle_day(
 ) -> dict[str, list[str]]:
     """The close of ``day`` for its plan: ideas nobody answered expire, and every
     purchase idea that was not bought becomes a shadow if the price reached its
-    entry zone, or "not fillable" if it did not. Returns tickers by outcome."""
-    outcome: dict[str, list[str]] = {"expired": [], "shadow": [], "not_fillable": []}
+    entry zone, or "not fillable" if it did not. A ticker that already has an open
+    shadow does not get a second one: the same idea repeated day after day would
+    count several times in the statistics. Returns tickers by outcome."""
+    outcome: dict[str, list[str]] = {
+        "expired": [],
+        "shadow": [],
+        "not_fillable": [],
+        "repeated": [],
+    }
+    shadowed = set(
+        session.scalars(
+            select(models.Position.ticker).where(
+                models.Position.is_shadow.is_(True), models.Position.state != "CLOSED"
+            )
+        )
+    )
     for idea in todays_ideas(session, day):
         if idea.state == "PROPOSED":
             why = (
@@ -537,6 +551,17 @@ def settle_day(
             states.transition(session, "idea", idea, "EXPIRED", actor="system", reason=why)
             outcome["expired"].append(idea.ticker)
         if idea.state not in ("EXPIRED", "DECLINED") or idea.verdict != "COMPRAR":
+            continue
+        if idea.ticker in shadowed:
+            states.transition(
+                session,
+                "idea",
+                idea,
+                "NOT_FILLABLE",
+                actor="system",
+                reason=f"no se abre otra sombra: ya hay una abierta de {idea.ticker}",
+            )
+            outcome["repeated"].append(idea.ticker)
             continue
         bar = bars.get(idea.ticker)
         if bar is None or not idea.shares or idea.stop is None:
@@ -558,6 +583,8 @@ def settle_day(
         position = _open_shadow(session, idea, price, day, config)
         # On the entry day only the stop is checked.
         _apply_bar(session, position, bar, config, entry_day=True)
+        if position.state != "CLOSED":
+            shadowed.add(idea.ticker)
         outcome["shadow"].append(idea.ticker)
     return outcome
 

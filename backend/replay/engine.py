@@ -35,6 +35,7 @@ from engine.exits import Bar, ShadowPosition
 from engine.indicators import IndicatorResult, Levels, compute_indicators
 from engine.portfolio import Holding, Portfolio
 from engine.recommender import DailyPlan, Idea, build_plan
+from engine.risk import AccountHistory
 from engine.risk_profile import profile_for
 from engine.screener import Candidate, screen
 
@@ -200,6 +201,8 @@ class _Account:
                     p.last_price,
                     p.stop,
                     p.entry_day,
+                    initial_stop=p.initial_stop,
+                    target=p.targets[1] if p.target_1_done else p.targets[0],
                 )
                 for p in self.positions
             ),
@@ -292,6 +295,11 @@ def simulate(
                 levels=today.levels,
             )
             portfolio = account.snapshot(day)
+            # The shadow account's own record feeds the streak factor of the size.
+            history = AccountHistory(
+                closed_results=tuple(trade.net_pnl for trade in account.closed),
+                equity_curve=tuple(account.equity_history),
+            )
             published = build_plan(
                 state,
                 indicators,
@@ -299,6 +307,7 @@ def simulate(
                 config,
                 candidates=today.candidates,
                 analyst=analyst,
+                history=history,
             )
         result.plans[day] = published
         result.ai_days += published.used_ai
@@ -316,6 +325,7 @@ def simulate(
                 opening_prices={t: bars[t].open for t in bars},
                 # The recheck reuses the morning's review: the AI is not asked again.
                 review=published.review,
+                history=history,
             )
         final = {idea.ticker: idea for idea in rechecked.ideas}
 

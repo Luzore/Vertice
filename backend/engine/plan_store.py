@@ -65,14 +65,13 @@ def _idea_details(idea: Idea, rank: int) -> dict[str, Any]:
 
 
 def _idea_row(
-    idea: Idea, plan: DailyPlan, run_id: int, candidate_id: int, rank: int
+    idea: Idea, plan: DailyPlan, run_id: int, candidate_id: int, rank: int, call_id: int | None
 ) -> models.Idea:
     levels, decision = idea.plan, idea.ai
-    call_id = plan.review.call_id if plan.review is not None and not idea.no_ai else None
     return models.Idea(
         run_id=run_id,
         candidate_id=candidate_id,
-        ai_call_id=call_id,
+        ai_call_id=call_id if not idea.no_ai else None,
         plan_date=plan.plan_date,
         ticker=idea.ticker,
         setup=idea.setup,
@@ -193,6 +192,11 @@ def save_plan(
     )
     session.add(run)
     session.flush()
+    # The AI call behind the plan, when it is one recorded in this database (a replay
+    # or a test keeps its calls in memory).
+    call_id = plan.review.call_id if plan.review is not None else None
+    if call_id is not None and session.get(models.AICall, call_id) is None:
+        call_id = None
     for rank, idea in enumerate(plan.ideas, start=1):
         candidate = models.Candidate(
             run_id=run.id,
@@ -212,7 +216,7 @@ def save_plan(
             )
             for result in idea.controls
         )
-        row = _idea_row(idea, plan, run.id, candidate.id, rank)
+        row = _idea_row(idea, plan, run.id, candidate.id, rank, call_id)
         session.add(row)
         session.flush()
         states.record_creation(

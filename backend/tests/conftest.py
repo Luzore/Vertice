@@ -69,6 +69,19 @@ def engine(db_url: str) -> Engine:
     engine.dispose()
 
 
+@pytest.fixture
+def market(engine: Engine) -> Engine:
+    """A database with a synthetic market: 24 tickers and 300 sessions up to 2026-11-13."""
+    from db import models
+    from tests.test_market_state import _sessions, seed
+
+    seed(engine, [f"T{i:02d}" for i in range(24)], _sessions(300))
+    with db_session.session_scope(engine) as session:
+        for row in session.query(models.Universe).all():
+            row.market_cap_usd = 5e9
+    return engine
+
+
 # --- collectors ---------------------------------------------------------------------
 
 

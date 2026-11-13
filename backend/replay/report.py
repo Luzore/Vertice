@@ -93,12 +93,11 @@ def _verdict_caveat(result: ReplayResult) -> str:
         return (
             "- **IA simulada**: responde con reglas fijas a partir del dossier. Prueba que el "
             "dossier, la validación y el presupuesto funcionan; no dice nada del criterio de la "
-            "IA real, que solo se puede medir hacia adelante. Falta el filtro de expectativa "
-            "(Fase 5)."
+            "IA real, que solo se puede medir hacia adelante."
         )
     return (
         "- **Veredictos por reglas**: falta el criterio de la IA, que solo se puede medir "
-        "hacia adelante, y el filtro de expectativa (Fase 5)."
+        "hacia adelante."
     )
 
 
@@ -222,6 +221,9 @@ def render(result: ReplayResult) -> str:
         "puntúa y los controles de noticias no bloquean.",
         "- **Barras diarias**: no se conoce el orden dentro del día. Si el stop y un objetivo se "
         "tocaron el mismo día, se asume que primero saltó el stop.",
+        "- **Motor de riesgo**: el tamaño usa la convicción (sin IA, la mitad del riesgo base), "
+        "la racha de la cuenta y el filtro de expectativa de +0.15R tras costos. La pausa por "
+        "caída de 10% no se simula, porque solo el usuario puede levantarla.",
         _verdict_caveat(result),
     ]
     return "\n".join(lines) + "\n"
