@@ -1,6 +1,6 @@
 # VERTICE developer commands. Run `make` to list them.
 .DEFAULT_GOAL := help
-.PHONY: help install migrate dev test check data replay preview lint format
+.PHONY: help install migrate dev test check data replay preview plan recheck close lint format
 
 BACKEND := backend
 UV_RUN := cd $(BACKEND) && uv run --frozen
@@ -23,15 +23,23 @@ test: ## Run the whole test suite
 check: ## Test every data source with a real request and show its status
 	$(UV_RUN) python -m collectors.check
 
-data: ## Download universe, two years of daily bars and macro data (takes minutes)
+data: migrate ## Download universe, two years of daily bars and macro data (takes minutes)
 	$(UV_RUN) python -m engine.ingest all
 
-AI ?= none
-replay: ## Replay past days: make replay FROM=2026-05-01 TO=2026-10-30 [AI=simulated]
-	$(UV_RUN) python -m replay --from $(FROM) --to $(TO) --ai $(AI)
+replay: migrate ## Replay past days: make replay FROM=2026-05-01 TO=2026-10-30 [AI=simulated]
+	$(UV_RUN) python -m replay --from $(FROM) --to $(TO) --ai $(or $(AI),none)
 
-preview: ## Show the plan from the downloaded data: make preview [AI=simulated|real]
-	$(UV_RUN) python -m engine.preview --ai $(AI)
+preview: migrate ## Show the plan from the downloaded data: make preview [AI=simulated|real]
+	$(UV_RUN) python -m engine.preview --ai $(or $(AI),none)
+
+plan: migrate ## Build and save today's plan: make plan [AI=real|simulated|none]
+	$(UV_RUN) python -m engine.daily premarket --ai $(or $(AI),real)
+
+recheck: migrate ## Review today's plan after the open (purchases that opened too high)
+	$(UV_RUN) python -m engine.daily recheck
+
+close: migrate ## Settle the day: shadows, exit rules on them and the day's capital
+	$(UV_RUN) python -m engine.daily close
 
 lint: ## Check code style and common mistakes
 	$(UV_RUN) ruff check .

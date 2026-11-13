@@ -13,7 +13,7 @@ Es un experimento educativo y medible, no asesoría financiera. La especificaci�
 | 2 | Motor de datos e indicadores: universo, datos normalizados, 62 métricas, régimen | Terminada |
 | 3 | Filtro, 22 controles, Plan del día por reglas y modo replay | Terminada |
 | 4 | Analista IA: dossier, Claude Code en modo headless, validación, presupuesto y caché | Terminada |
-| 5 | Riesgo, Plan del día y confirmaciones | Pendiente |
+| 5 | Motor de riesgo, Plan del día guardado, confirmaciones "La compré / No la compré", sombras y máquina de estados | Terminada |
 | 6 | Vigilante y alertas | Pendiente |
 | 7 | Dashboard | Pendiente |
 | 8 | Aprendizaje y métricas | Pendiente |
@@ -57,6 +57,32 @@ make preview AI=simulated
 
 `AI=none` usa solo reglas, `AI=simulated` pasa los finalistas por la IA simulada y `AI=real` consulta a Claude (gasta una consulta del presupuesto diario y necesita Claude Code instalado y con sesión iniciada).
 
+Las tres corridas del día, a mano (el programador que las lanza a su hora llega con el vigilante):
+
+```bash
+make plan
+```
+
+```bash
+make recheck
+```
+
+```bash
+make close
+```
+
+`make plan` arma y guarda el Plan del día con tu cuenta real (efectivo y posiciones confirmadas). `make recheck` es la revisión de las 9:45: una compra que abrió arriba de su precio de "no perseguir" pasa a VIGILAR. `make close` cierra el día: las ideas que no contestaste se siguen como sombras y se registra tu capital.
+
+Con `make dev` corriendo, el plan y las confirmaciones están en la API:
+
+- `GET /api/plan`: el plan de hoy.
+- `POST /api/ideas/{id}/bought` con precio y cantidad: "La compré".
+- `POST /api/ideas/{id}/declined`: "No la compré".
+- `POST /api/positions/{id}/sold`: "Vendí" (parcial o total).
+- `GET /api/account`, `GET /api/positions`, `GET /api/status`.
+
+El sistema nunca envía órdenes: solo registra lo que tú le dices que hiciste.
+
 `make` sin argumentos lista todos los comandos.
 
 ## Dónde está cada cosa
@@ -65,7 +91,7 @@ make preview AI=simulated
 - `.env`: las API keys. Nunca se sube a git; `.env.example` lista los nombres.
 - `backend/core/`: configuración, reloj (real o simulado), calendario NYSE y logging.
 - `backend/collectors/`: un colector por fuente, con límite de llamadas, caché, reintentos y detección de datos viejos. Los límites de cada proveedor están en la sección `data` de `config.yaml`.
-- `backend/engine/`: universo, motor de datos (sin datos del futuro), indicadores, régimen, filtro, controles, Plan del día y analista IA.
+- `backend/engine/`: universo, motor de datos (sin datos del futuro), indicadores, régimen, filtro, controles, analista IA, motor de riesgo, Plan del día, confirmaciones, sombras y máquina de estados.
 - `prompts/` y `schemas/`: las instrucciones que recibe la IA y el formato JSON que debe devolver.
 - `runs/`: dossiers enviados a la IA, la carpeta vacía desde la que corre (`ai_sandbox/`) y los reportes de replay. No se sube a git.
 - `backend/replay/`: corre días pasados con reloj simulado y compara el resultado con SPY.

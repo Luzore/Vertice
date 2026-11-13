@@ -79,13 +79,13 @@ def test_expectancy_without_the_ai_assumes_the_minimum_probability():
 
 @pytest.mark.parametrize(
     ("probability", "passes"),
-    [(0.45, False), (0.449, False), (0.4501, True), (0.50, True)],
+    [(0.44, False), (0.449, False), (0.45, True), (0.4501, True), (0.50, True)],
 )
 def test_expectancy_filter_needs_fifteen_hundredths_of_an_r(probability, passes):
-    # EV = 3p - 1.2, so +0.15R is reached at p = 0.45.
+    # EV = 3p - 1.2, so +0.15R is reached exactly at p = 0.45.
     outlook = expectancy(PLAN, probability, min_probability=0.42, costs=CONFIG.costs)
 
-    assert outlook.passes is (passes or probability == 0.45)
+    assert outlook.passes is passes
     assert risk.MIN_EV_R == 0.15
 
 

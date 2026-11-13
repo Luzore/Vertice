@@ -65,6 +65,16 @@ Cualquier cambio de código que rompa estas reglas es un bug, aunque "funcione".
 - **2026-11-12 · Replay con IA.** Solo con la IA simulada, que responde con reglas fijas: prueba el dossier, la validación y el presupuesto, no el criterio de la IA real.
 - **2026-11-12 · Noticias con IA.** La IA puede marcar un titular como grave, pero nunca quitar la marca que pusieron las reglas (alimenta el control C21).
 
+- **2026-11-13 · Convicción.** El factor va de 0.5 con la probabilidad mínima del perfil a 1.25 quince puntos arriba, en línea recta. Sin IA no hay probabilidad: el factor es 0.5 y la expectativa se calcula con la probabilidad mínima del perfil. Hasta que la Fase 8 calibre, la probabilidad calibrada es la que dio la IA.
+- **2026-11-13 · Expectativa y tamaño.** La expectativa (EV_R ≥ 0.15) se mide entrando a la mitad de la zona; el tamaño, desde el tope de la zona, para que ninguna entrada dentro de ella pase del riesgo permitido. Los topes de agresividad son el máximo de posiciones y el máximo por posición; el riesgo por idea es la base que la convicción puede subir hasta 1.25 veces.
+- **2026-11-13 · Efectivo.** `capital.cash_usd` es el dinero que el usuario metió a la cuenta (lo cambia al depositar o retirar). El efectivo disponible es eso menos las compras confirmadas más las ventas confirmadas.
+- **2026-11-13 · Rotación.** Lo que le queda a una posición es p × distancia a su objetivo − (1 − p) × distancia a su stop, en R iniciales, con la probabilidad de su idea. Se propone rotar cuando una idea sin espacio o sin efectivo la supera por más de 0.5R. Es solo una propuesta.
+- **2026-11-13 · Frenos.** El freno semanal y la pausa quedan activos hasta que el usuario los levanta. Al levantarlos, la misma pérdida no los vuelve a disparar: el semanal queda libre el resto de esa semana y la pausa mide la caída desde el capital de ese momento.
+- **2026-11-13 · Correcciones.** Se puede corregir el precio, la cantidad, la hora o la comisión de una compra; convertir un "no la compré" (o una sombra) en compra; y anular una compra capturada por error mientras no tenga ventas. Todo deja rastro; una posición anulada no cuenta para el efectivo.
+- **2026-11-13 · Sombras.** Una idea COMPRAR que no compraste se vuelve sombra al cierre si el precio del día tocó la zona; si no, queda "no ejecutable". Un ticker con una sombra abierta no abre otra. Las ideas VIGILAR y NO HOY solo expiran. Las sombras se siguen con barras diarias.
+- **2026-11-13 · Plan repetido el mismo día.** Un plan nuevo reemplaza al del día mientras nadie lo haya contestado; después ya no se puede reemplazar.
+- **2026-11-13 · Transición inválida.** No se aplica nada de esa operación y queda un incidente que pone el sistema en PRECAUCIÓN hasta que el usuario lo resuelve. Repetir "no la compré" sobre una idea ya rechazada no cuenta como incidente.
+
 ## Comandos
 
 Desde la raíz del repo (requiere `uv` y `make`):
@@ -77,7 +87,10 @@ Desde la raíz del repo (requiere `uv` y `make`):
 - `make check`: prueba cada fuente de datos con una llamada real y muestra estado y latencia.
 - `make data`: descarga el universo, 2 años de barras diarias y los datos macro (tarda varios minutos).
 - `make replay FROM=2026-05-01 TO=2026-10-30`: corre el sistema sobre días pasados con reloj simulado y deja un reporte en `runs/replay/`. Con `AI=simulated` los finalistas pasan por la IA simulada.
-- `make preview`: muestra el plan que saldría con los datos ya descargados. `AI=simulated` usa la IA simulada; `AI=real` consulta a Claude y gasta una consulta del presupuesto diario.
+- `make preview`: muestra el plan que saldría con los datos ya descargados, sin guardarlo. `AI=simulated` usa la IA simulada; `AI=real` consulta a Claude y gasta una consulta del presupuesto diario.
+- `make plan`: arma y guarda el Plan del día con la cuenta real. Usa la IA real; con `AI=simulated` o `AI=none` no gasta consultas.
+- `make recheck`: revisión tras la apertura del plan guardado (gaps y precio de "no perseguir").
+- `make close`: cierre del día: sombras, reglas de salida sobre las sombras y capital del día.
 
 Los módulos del backend se ejecutan desde `backend/` (por ejemplo `cd backend && uv run python -m collectors.check`).
 

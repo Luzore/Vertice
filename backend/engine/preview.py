@@ -1,9 +1,9 @@
 """``python -m engine.preview``: the plan of the day from the data already downloaded.
 
 A tool to look at what the system would publish right now, with rule verdicts,
-with the simulated AI or with the real one. It does not save the plan (that is
-the daily pipeline's job); a real AI call is recorded in ``ai_calls`` and counts
-against the daily budget like any other.
+with the simulated AI or with the real one, for the real account. It does not
+save the plan (``python -m engine.daily premarket`` does); a real AI call is
+recorded in ``ai_calls`` and counts against the daily budget like any other.
 """
 
 from __future__ import annotations
@@ -15,11 +15,11 @@ from datetime import date
 
 from core import clock, settings
 from core.logging import configure_logging
-from db.session import make_engine, session_scope
+from db.session import make_engine, make_session_factory
+from engine import account
 from engine.ai_analyst import Analyst, live_analyst, simulated_analyst
 from engine.data_engine import build_market_state
 from engine.indicators import compute_indicators
-from engine.portfolio import Portfolio
 from engine.recommender import build_plan, render_plan
 
 
@@ -57,16 +57,25 @@ def main(argv: list[str] | None = None) -> int:
     )
     # A past date runs on a simulated clock; today runs on the real one.
     with clock.simulated(as_of) if args.date is not None else contextlib.nullcontext():
-        with session_scope(engine) as session:
+        # Read-only: the brake is worked out but nothing about it is written.
+        session = make_session_factory(engine)()
+        try:
             state = build_market_state(session, config, as_of=as_of)
+            portfolio = account.load_portfolio(session, config, as_of=as_of)
+            history = account.load_history(session)
+            brake = account.current_brake(session, config, portfolio, history)
+        finally:
+            session.rollback()
+            session.close()
         indicators = compute_indicators(state, config.regime)
-        portfolio = Portfolio(cash=config.capital.cash_usd)
         analyst: Analyst | None = None
         if args.ai == "simulated":
             analyst = simulated_analyst(config)
         elif args.ai == "real":
             analyst = live_analyst(config, engine)
-        plan = build_plan(state, indicators, portfolio, config, analyst=analyst)
+        plan = build_plan(
+            state, indicators, portfolio, config, analyst=analyst, history=history, brake=brake
+        )
         print(render_plan(plan, config, portfolio.capital))
         if analyst is not None:
             budget = analyst.gateway.budget()
