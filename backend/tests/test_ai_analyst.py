@@ -561,9 +561,13 @@ def test_plan_with_the_simulated_ai_matches_the_rules_and_marks_who_decided():
     # A candidate a control blocked never had an AI decision.
     assert by_ticker["CAP"].no_ai and by_ticker["CAP"].ai is None
     assert all(idea.no_ai and idea.ai is None for idea in rules.ideas)
-    # The size comes from the code, the same with or without the AI.
+    # The size comes from the code. The AI's probability (0.575) only moves the conviction
+    # factor: 0.875 of the base risk of 37.50 over 1.95 per share -> 16 shares; without
+    # the AI the factor is 0.5 -> 9 shares.
     rule_buy = rules.by_verdict("COMPRAR")[0]
-    assert (by_ticker["BUY"].shares, by_ticker["BUY"].amount) == (rule_buy.shares, rule_buy.amount)
+    assert by_ticker["BUY"].multipliers["conviccion"] == pytest.approx(0.875)
+    assert (by_ticker["BUY"].shares, rule_buy.shares) == (16, 9)
+    assert by_ticker["BUY"].amount == pytest.approx(16 * 50.25)
 
 
 def test_controls_veto_an_ai_purchase():
@@ -739,7 +743,9 @@ def test_plan_text_shows_what_the_ai_said():
     text = render_plan(plan, CONFIG, capital=5000.0)
 
     assert "Lectura de la IA: IA simulada. Régimen ALCISTA." in text
-    assert "COMPRAR  BUY  (RUPTURA · puntaje 85)" in text
+    assert "COMPRAR  BUY  (RUPTURA · puntaje 85 · prob. 0.57)" in text
+    # 0.575 x 2.0R - 0.425 - 0.20R of costs = 0.525R.
+    assert "Expectativa: +0.52R después de costos" in text
     assert (
         "IA: 57% de probabilidad de tocar el objetivo antes que el stop · confianza 50% · "
         "horizonte 5 días"

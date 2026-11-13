@@ -11,7 +11,9 @@ and its validated decisions set the verdict, under three limits that never move:
 
 * the controls run again on the AI's levels and still veto (principle 5);
 * COMPRAR needs the minimum score and the minimum probability of the risk profile;
-* the size of the position is computed here, never by the AI (principle 4).
+* the size of the position is computed by the risk engine, never by the AI
+  (principle 4), and an idea is only bought if its expectancy after costs is
+  at least +0.15R.
 
 If the AI is off, out of quota or failing, the plan falls back to the rules and
 every idea is marked "sin IA".
@@ -20,7 +22,7 @@ every idea is marked "sin IA".
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 
@@ -29,6 +31,7 @@ import pandas as pd
 from core import clock
 from core.settings import AppConfig
 from engine import controls as ctl
+from engine import risk
 from engine.ai_analyst import Analyst, AnalystReview
 from engine.ai_validation import AIDecision
 from engine.data_engine import MarketState
@@ -36,13 +39,29 @@ from engine.dossier import Finalist
 from engine.indicators import IndicatorResult, Levels
 from engine.levels import valid_levels
 from engine.portfolio import Portfolio
+from engine.risk import (
+    AccountHistory,
+    Brake,
+    Expectancy,
+    Rotation,
+    conviction_multiplier,
+    expectancy,
+    position_size,
+    propose_rotations,
+    streak_multiplier,
+    worst_case_risk,
+)
 from engine.risk_profile import RiskProfile, profile_for
 from engine.schemas import EconEvent
 from engine.screener import Candidate, screen
 from engine.trade_plan import TradePlan, build_trade_plan
 
 WATCH_MARGIN = 10.0  # points below the minimum score that still earn a VIGILAR
+MIN_EV_R = risk.MIN_EV_R
 MAX_REJECTED_LISTED = 5
+# Controls that only say "there is no room or no cash": an idea blocked by nothing
+# else can still be worth a rotation.
+ROOM_CONTROLS = frozenset({"C15", "C18"})
 
 
 @dataclass(frozen=True)
@@ -69,6 +88,22 @@ class Idea:
     metrics: dict[str, float] = field(default_factory=dict)
     # What the AI said about this idea, once validated; None when it was not asked.
     ai: AIDecision | None = None
+    # Expected value after costs, when the idea has a plan and no control blocked it.
+    expectancy: Expectancy | None = None
+    # Factors applied to the base risk (conviction, controls, streak) and what capped the size.
+    multipliers: dict[str, float] = field(default_factory=dict)
+    limited_by: str | None = None
+
+    @property
+    def ev_r(self) -> float | None:
+        return self.expectancy.ev_r if self.expectancy is not None else None
+
+    @property
+    def probability(self) -> float | None:
+        """The probability the size and the expectancy used; None without the AI."""
+        if self.expectancy is None or self.expectancy.assumed_probability:
+            return None
+        return self.expectancy.probability
 
 
 @dataclass(frozen=True)
@@ -85,6 +120,11 @@ class DailyPlan:
     with_setup: int
     # The analyst's review of the finalists; None when no analyst took part.
     review: AnalystReview | None = None
+    # Proposals to swap a weak position for a better idea; the user decides.
+    rotations: tuple[Rotation, ...] = ()
+    # The automatic brake in force, and why the size is halved by a bad run.
+    brake: Brake | None = None
+    streak_note: str = ""
 
     @property
     def used_ai(self) -> bool:
@@ -137,39 +177,6 @@ def market_reading(indicators: IndicatorResult) -> str:
     if not math.isnan(highs):
         parts.append(f"Nuevos máximos de 52 semanas: {highs:.0f}; nuevos mínimos: {lows:.0f}.")
     return " ".join(parts)
-
-
-def worst_case_risk(plan: TradePlan) -> float:
-    """Loss per share if the order fills at the top of the entry zone and the stop is hit."""
-    return plan.entry_max - plan.stop
-
-
-def _size(
-    idea: Idea,
-    portfolio: Portfolio,
-    profile: RiskProfile,
-    config: AppConfig,
-    cash: float,
-    sector_value: float,
-) -> tuple[float, float, float]:
-    """Shares, amount and dollars at risk for one idea (the basic rule; Phase 5
-    adds conviction, streak and expectancy)."""
-    plan = idea.plan
-    capital = portfolio.capital
-    risk_budget = capital * profile.risk_pct / 100 * idea.size_multiplier
-    # Risk is measured from the worst fill of the zone (its top), so buying anywhere
-    # inside the zone never risks more than the budget.
-    risk_per_share = worst_case_risk(plan)
-    shares = risk_budget / risk_per_share
-    limits = [
-        profile.max_position_pct / 100 * capital,
-        cash,
-        config.controls.max_sector_pct / 100 * capital - sector_value,
-    ]
-    shares = min(shares, max(0.0, min(limits)) / plan.entry_max)
-    step = 0.01 if config.capital.fractional_shares else 1.0
-    shares = math.floor(shares / step + 1e-9) * step
-    return shares, shares * plan.entry_max, shares * risk_per_share
 
 
 @dataclass(frozen=True)
@@ -229,6 +236,9 @@ def build_plan(
     opening_prices: Mapping[str, float] | None = None,
     analyst: Analyst | None = None,
     review: AnalystReview | None = None,
+    history: AccountHistory | None = None,
+    brake: Brake | None = None,
+    calibrate: Callable[[float], float] | None = None,
 ) -> DailyPlan:
     """The plan of the day.
 
@@ -236,6 +246,10 @@ def build_plan(
     already made (the 09:45 recheck does not ask again). With neither, the verdicts
     come from rules. ``opening_prices`` is given at the recheck: an idea that
     opened above its no-chase price becomes VIGILAR.
+
+    ``history`` feeds the streak multiplier, ``brake`` is the automatic brake in
+    force (no purchases while it is on) and ``calibrate`` turns the AI's raw
+    probability into the calibrated one (the identity until there is evidence).
     """
     profile = profile_for(config.system.aggressiveness)
     scored = list(candidates) if candidates is not None else screen(indicators, config.screener)
@@ -328,6 +342,7 @@ def build_plan(
     decisions = review.decisions if review is not None and review.used_ai else None
 
     ideas: list[Idea] = []
+    no_room: list[tuple[str, float]] = []
     for item in evaluated:
         candidate, ticker = item.candidate, item.candidate.ticker
         plan, results = item.context.plan, item.results
@@ -368,6 +383,37 @@ def build_plan(
                         f"la IA estima {decision.probability:.0%} de probabilidad de tocar el "
                         f"objetivo antes que el stop; el mínimo es {profile.min_probability:.0%}"
                     )
+        # Expectancy after costs, with the calibrated probability of the AI.
+        outlook: Expectancy | None = None
+        if candidate.setup is not None and plan is not None and not ctl.is_blocked(results):
+            probability = None
+            if decision is not None and decision.plan is not None:
+                probability = decision.probability
+                if calibrate is not None and probability is not None:
+                    probability = min(1.0, max(0.0, calibrate(probability)))
+            outlook = expectancy(plan, probability, profile.min_probability, config.costs)
+            if verdict == "COMPRAR" and not outlook.passes:
+                verdict, trigger = "VIGILAR", _watch_trigger(candidate, plan)
+                reason = (
+                    f"expectativa de {outlook.ev_r:+.2f}R después de costos; "
+                    f"el mínimo es +{MIN_EV_R:.2f}R"
+                )
+        if verdict == "COMPRAR" and brake is not None and not brake.allows_buying:
+            verdict, trigger = "VIGILAR", _watch_trigger(candidate, plan)
+            reason = f"freno automático: {brake.text}"
+        # An idea that only lacks room or cash is a candidate for a rotation.
+        blocked_by = {r.id for r in results if r.effect == "block"}
+        if (
+            candidate.setup is not None
+            and plan is not None
+            and blocked_by
+            and blocked_by <= ROOM_CONTROLS
+            and (brake is None or brake.allows_buying)
+            and _rule_verdict(candidate, plan, profile, config, opening)[0] == "COMPRAR"
+        ):
+            outlook = expectancy(plan, None, profile.min_probability, config.costs)
+            if outlook.passes:
+                no_room.append((ticker, outlook.ev_r))
         ideas.append(
             Idea(
                 ticker=ticker,
@@ -386,15 +432,20 @@ def build_plan(
                 no_ai=decision is None,
                 metrics=candidate.metrics,
                 ai=decision,
+                expectancy=outlook,
             )
         )
 
-    # Give out cash in score order, within the limits of positions, cash and sector.
+    # Give out cash from the best expectancy down, within the limits of positions,
+    # cash and sector. What does not fit waits: "COMPRAR si liberas efectivo".
+    capital = portfolio.capital
     cash = portfolio.cash
     slots = profile.max_positions - len(portfolio.holdings)
+    streak, streak_note = streak_multiplier(history)
     sector_values: dict[str | None, float] = {}
     sized: list[Idea] = []
-    for idea in sorted(ideas, key=lambda i: -i.score):
+    waiting: list[tuple[str, float]] = list(no_room)
+    for idea in sorted(ideas, key=lambda i: (-(i.ev_r if i.ev_r is not None else -9.0), -i.score)):
         if idea.verdict != "COMPRAR":
             sized.append(idea)
             continue
@@ -406,6 +457,7 @@ def build_plan(
             )
             continue
         if slots <= 0:
+            waiting.append((idea.ticker, idea.ev_r))
             sized.append(
                 replace(
                     idea,
@@ -416,29 +468,59 @@ def build_plan(
             )
             continue
         held = portfolio.sector_value(idea.sector_etf) + sector_values.get(idea.sector_etf, 0.0)
-        shares, amount, risk_usd = _size(
-            idea, portfolio, profile, config, cash, held if idea.sector_etf else 0.0
+        size = position_size(
+            idea.plan,
+            capital=capital,
+            cash=cash,
+            profile=profile,
+            config=config,
+            conviction=conviction_multiplier(idea.probability, profile.min_probability),
+            controls=idea.size_multiplier,
+            streak=streak,
+            sector_value=held if idea.sector_etf else 0.0,
         )
-        if shares <= 0:
+        if size.shares <= 0:
             step = 0.01 if config.capital.fractional_shares else 1.0
-            allowed = portfolio.capital * profile.risk_pct / 100 * idea.size_multiplier
-            if allowed < worst_case_risk(idea.plan) * step:
+            risk_per_share = worst_case_risk(idea.plan)
+            if size.risk_budget < risk_per_share * step:
                 # The account is too small for even one share at this risk per idea.
                 why = (
-                    f"el riesgo permitido por idea (${allowed:,.2f}) no alcanza para una acción "
-                    f"(riesgo por acción ${worst_case_risk(idea.plan):,.2f})"
+                    f"el riesgo permitido para esta idea (${size.risk_budget:,.2f}) no alcanza "
+                    f"para una acción (riesgo por acción ${risk_per_share:,.2f})"
                 )
-            else:
+            elif size.limited_by == "efectivo disponible":
                 why = "COMPRAR si liberas efectivo"
-            sized.append(replace(idea, verdict="VIGILAR", reason=why))
+                waiting.append((idea.ticker, idea.ev_r))
+            else:
+                why = f"el {size.limited_by} no alcanza para una acción"
+            sized.append(replace(idea, verdict="VIGILAR", reason=why, multipliers=size.multipliers))
             continue
-        cash -= amount
+        cash -= size.amount
         slots -= 1
-        sector_values[idea.sector_etf] = sector_values.get(idea.sector_etf, 0.0) + amount
-        sized.append(replace(idea, shares=shares, amount=amount, risk_usd=risk_usd))
+        sector_values[idea.sector_etf] = sector_values.get(idea.sector_etf, 0.0) + size.amount
+        sized.append(
+            replace(
+                idea,
+                shares=size.shares,
+                amount=size.amount,
+                risk_usd=size.risk_usd,
+                multipliers=size.multipliers,
+                limited_by=size.limited_by,
+            )
+        )
+    rotations = propose_rotations(waiting, portfolio.holdings, profile.min_probability)
 
     order = {"COMPRAR": 0, "VIGILAR": 1, "NO_HOY": 2}
-    ranked = sorted(sized, key=lambda i: (order[i.verdict], -i.score, i.ticker))
+    ranked = sorted(
+        sized,
+        key=lambda i: (
+            order[i.verdict],
+            # Purchases by expectancy; the rest by score.
+            -(i.ev_r or 0.0) if i.verdict == "COMPRAR" else 0.0,
+            -i.score,
+            i.ticker,
+        ),
+    )
     actionable = [i for i in ranked if i.verdict != "NO_HOY"]
     rejected = [i for i in ranked if i.verdict == "NO_HOY"]
     keep = max(minimum - len(actionable), min(MAX_REJECTED_LISTED, len(rejected)))
@@ -456,6 +538,9 @@ def build_plan(
         screened=len(scored),
         with_setup=len(with_setup),
         review=review,
+        rotations=tuple(rotations),
+        brake=brake,
+        streak_note=streak_note,
     )
 
 
@@ -483,6 +568,11 @@ def render_plan(plan: DailyPlan, config: AppConfig, capital: float) -> str:
         lines.append(f"Lectura de la IA: {review.market_reading}")
     if review is not None and not review.used_ai and review.note:
         lines.append(f"Veredictos por reglas ({review.label}): {review.note}.")
+    if plan.brake is not None and not plan.brake.allows_buying:
+        label = "PAUSA" if plan.brake.state == "PAUSA" else "SOLO VIGILAR"
+        lines.append(f"{label}: {plan.brake.text}.")
+    if plan.streak_note:
+        lines.append(f"Tamaño a la mitad por racha: {plan.streak_note}.")
     if plan.events_today:
         events = ", ".join(
             f"{e.name} {clock.to_market(e.scheduled_at):%H:%M} NY" for e in plan.events_today
@@ -496,6 +586,8 @@ def render_plan(plan: DailyPlan, config: AppConfig, capital: float) -> str:
         label = _VERDICT_LABELS[idea.verdict]
         setup = idea.setup or "sin setup"
         suffix = " · sin IA" if idea.no_ai else ""
+        if idea.probability is not None and idea.verdict != "NO_HOY":
+            suffix = f" · prob. {idea.probability:.2f}"
         lines.append(f"{label}  {idea.ticker}  ({setup} · puntaje {idea.score:.0f}{suffix})")
         p = idea.plan
         if idea.verdict != "NO_HOY" and p is not None:
@@ -515,6 +607,8 @@ def render_plan(plan: DailyPlan, config: AppConfig, capital: float) -> str:
                 f"({share:.0f}% del capital) "
                 f"· riesgo ${idea.risk_usd:,.0f}"
             )
+        if idea.verdict != "NO_HOY" and idea.expectancy is not None:
+            lines.append(f"Expectativa: {idea.expectancy.ev_r:+.2f}R después de costos")
         if idea.notes:
             lines.append(f"Por qué: {'; '.join(idea.notes)}")
         decision = idea.ai
@@ -539,4 +633,13 @@ def render_plan(plan: DailyPlan, config: AppConfig, capital: float) -> str:
         warnings = [f"{c.id} {c.reason}" for c in idea.controls if c.effect == "reduce"]
         if warnings:
             lines.append(f"Avisos: {'; '.join(warnings)}")
+    for rotation in plan.rotations:
+        lines += ["", f"Rotación propuesta: {rotation.text}"]
+    if buys:
+        lines += [
+            "",
+            "Cómo entrar: orden límite dentro de la zona, nunca a mercado; no entres en los "
+            f"primeros {config.entry.skip_first_minutes} minutos de la sesión; si tu casa de "
+            "bolsa lo permite, deja también la orden stop en el precio indicado.",
+        ]
     return "\n".join(lines)

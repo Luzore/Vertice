@@ -17,6 +17,9 @@ class Holding:
     opened_on: date
     # The stop the position was opened with; ``stop`` may have been raised since.
     initial_stop: float | None = None
+    # Its next target and the probability its idea was given, for rotations.
+    target: float | None = None
+    probability: float | None = None
 
     @property
     def market_value(self) -> float:

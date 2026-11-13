@@ -527,9 +527,12 @@ def test_sizing_respects_cash_risk_and_position_limits():
         assert idea.amount <= profile.max_position_pct / 100 * 5000 + 1e-9  # 25% = $1,250
         assert idea.risk_usd <= profile.risk_pct / 100 * 5000 + 1e-9  # 0.75% = $37.50
         assert idea.amount == pytest.approx(idea.shares * idea.plan.entry_max)
-    # Risk 37.5 over the worst-case loss per share (50.25 - 48.30 = 1.95) -> 19 shares.
-    assert (buys[0].shares, buys[0].amount) == (19, pytest.approx(19 * 50.25))
-    assert buys[0].risk_usd == pytest.approx(19 * 1.95)
+        # Without the AI there is no probability: the conviction factor is the lowest.
+        assert idea.multipliers == {"conviccion": 0.5, "controles": 1.0, "racha": 1.0}
+    # Risk 37.50 x 0.5 = 18.75 over the worst-case loss per share (50.25 - 48.30 = 1.95)
+    # -> 9 shares.
+    assert (buys[0].shares, buys[0].amount) == (9, pytest.approx(9 * 50.25))
+    assert buys[0].risk_usd == pytest.approx(9 * 1.95)
     waiting = [i for i in plan.ideas if i.verdict == "VIGILAR"]
     assert [i.reason for i in waiting] == ["sin espacio: el límite es de 5 posiciones"] * 3
 
@@ -539,8 +542,8 @@ def test_sizing_never_spends_more_than_the_cash():
     buys = plan.by_verdict("COMPRAR")
 
     assert sum(i.amount for i in buys) <= 2600.0
-    # Capital 2,600: 0.75% risk is 19.50 over 1.95 per share -> 10 shares each.
-    assert [i.shares for i in buys] == [10, 10, 10, 10, 10]
+    # Capital 2,600: 0.75% x 0.5 is 9.75 of risk over 1.95 per share -> 5 shares each.
+    assert [i.shares for i in buys] == [5, 5, 5, 5, 5]
     assert plan.by_verdict("VIGILAR")[0].reason == "sin espacio: el límite es de 5 posiciones"
 
 
@@ -549,14 +552,16 @@ def test_the_last_idea_gets_only_the_cash_that_is_left():
         Holding(f"H{i}", f"X{i}", 10, 110.0, 110.0, 100.0, date(2026, 11, 5)) for i in range(2)
     )
 
-    plan = plan_for(EIGHT[:3], portfolio=Portfolio(cash=2300.0, holdings=held))  # capital 4,500
+    plan = plan_for(EIGHT[:3], portfolio=Portfolio(cash=700.0, holdings=held))  # capital 2,900
 
-    # 0.75% of 4,500 is 33.75 -> 17 shares (854.25 each). The third finds 591.50 left: 11 shares.
+    # 0.75% x 0.5 of 2,900 is 10.88 -> 5 shares (251.25 each). The third finds 197.50 left:
+    # 3 shares.
     assert [(i.verdict, i.shares) for i in plan.ideas] == [
-        ("COMPRAR", 17),
-        ("COMPRAR", 17),
-        ("COMPRAR", 11),
+        ("COMPRAR", 5),
+        ("COMPRAR", 5),
+        ("COMPRAR", 3),
     ]
+    assert [i.limited_by for i in plan.ideas] == [None, None, "efectivo disponible"]
 
 
 def test_no_cash_means_buy_if_you_free_cash():
@@ -578,7 +583,8 @@ def test_account_too_small_for_one_share_at_the_allowed_risk():
 
     assert plan.by_verdict("COMPRAR") == []
     assert plan.ideas[0].reason == (
-        "el riesgo permitido por idea ($0.90) no alcanza para una acción (riesgo por acción $1.95)"
+        "el riesgo permitido para esta idea ($0.45) no alcanza para una acción "
+        "(riesgo por acción $1.95)"
     )
 
 
@@ -625,7 +631,8 @@ def test_reducing_controls_halve_the_size():
     reduced = plan_for(EIGHT[:1], events=[fomc]).ideas[0]
 
     assert (normal.size_multiplier, reduced.size_multiplier) == (1.0, 0.5)
-    assert (normal.shares, reduced.shares) == (19, 9)
+    assert (normal.shares, reduced.shares) == (9, 4)
+    assert reduced.multipliers == {"conviccion": 0.5, "controles": 0.5, "racha": 1.0}
     assert reduced.verdict == "COMPRAR"
 
 
@@ -674,7 +681,11 @@ def test_plan_text():
     assert "COMPRAR  XYZ  (RUPTURA · puntaje 82 · sin IA)" in text
     assert "Entrada: límite 49.75–50.25 (no perseguir sobre 50.75)" in text
     assert "Stop: 48.30 (−1R)   Objetivos: 53.40 (+2.0R) / 55.10 (+3.0R)" in text
-    assert "Tamaño: 9 acciones ≈ $452 (9% del capital) · riesgo $18" in text  # halved by the FOMC
+    assert "Tamaño: 4 acciones ≈ $201 (4% del capital) · riesgo $8" in text  # halved by the FOMC
+    # Probability 0.50 assumed, 2.0R to the target, costs of 0.20R: 1.0 - 0.5 - 0.2.
+    assert "Expectativa: +0.30R después de costos" in text
+    assert "Cómo entrar: orden límite dentro de la zona, nunca a mercado" in text
+    assert "primeros 15 minutos" in text
     assert "Por qué: rompe máximo de 20 días" in text
     assert "Avisos: C09 FOMC a las 14:00 NY · 13:00 Monterrey: tamaño a la mitad" in text
     assert "VIGILAR  NEAR" in text and "Se activa si: cierre de vela de 5 min" in text

@@ -377,31 +377,31 @@ def test_replay_follows_each_buy_idea_as_a_shadow_position(played):
 
     assert set(trades) == {"WIN", "LOSE"}
     win = trades["WIN"]
-    # 0.75% of 5,000 is 37.50 of risk; worst-case loss per share 100.50 - 96.80 = 3.70
-    # -> 10 shares, bought at the open of 100.20.
-    assert (win.shares, win.entry_price, win.entry_day) == (10, 100.2, REPLAY_DAYS[0])
+    # 0.75% of 5,000 is 37.50; without the AI the conviction factor is 0.5 -> 18.75 of risk.
+    # Worst-case loss per share 100.50 - 96.80 = 3.70 -> 5 shares, bought at the open of 100.20.
+    assert (win.shares, win.entry_price, win.entry_day) == (5, 100.2, REPLAY_DAYS[0])
     assert (win.initial_stop, win.targets) == (96.8, (106.4, 109.6))
     assert [(f.day, f.side, f.price, f.shares) for f in win.fills] == [
-        (REPLAY_DAYS[0], "buy", 100.2, 10),
-        (REPLAY_DAYS[1], "sell", 106.4, 5),  # first target: half
-        (REPLAY_DAYS[2], "sell", 109.6, 5),  # second target: the rest
+        (REPLAY_DAYS[0], "buy", 100.2, 5),
+        (REPLAY_DAYS[1], "sell", 106.4, 2),  # first target: half, rounded down
+        (REPLAY_DAYS[2], "sell", 109.6, 3),  # second target: the rest
     ]
     assert win.exit_reason == exits.TARGET_2
-    assert win.net_pnl == pytest.approx(78.0 - (1002 + 532 + 548) * 0.0034)
-    assert win.net_r == pytest.approx(win.net_pnl / (10 * 3.4))
-    # Bought inside the zone, so the real risk stays within the 37.50 budget.
-    assert win.shares * win.risk_per_share <= 37.5
+    assert win.net_pnl == pytest.approx(40.6 - (501 + 212.8 + 328.8) * 0.0034)
+    assert win.net_r == pytest.approx(win.net_pnl / (5 * 3.4))
+    # Bought inside the zone, so the real risk stays within the 18.75 budget.
+    assert win.shares * win.risk_per_share <= 18.75
 
     lose = trades["LOSE"]
     assert (lose.shares, lose.entry_price, lose.exit_reason, lose.exit_day) == (
-        20,
+        10,
         50.1,
         exits.STOP,
         REPLAY_DAYS[1],
     )
     assert lose.fills[-1].price == 48.4  # sold at the stop, under the support of 48.50
-    assert lose.net_r == pytest.approx((-34.0 - (1002 + 968) * 0.0034) / (20 * 1.7))
-    assert lose.shares * lose.risk_per_share <= 37.5
+    assert lose.net_r == pytest.approx((-17.0 - (501 + 484) * 0.0034) / (10 * 1.7))
+    assert lose.shares * lose.risk_per_share <= 18.75
 
 
 def test_replay_records_what_happened_to_every_idea(played):
@@ -429,9 +429,9 @@ def test_replay_account_and_benchmark(played):
     first, last = played.days[0], played.days[-1]
 
     # End of day 1: cash after both purchases and their costs, positions at the close.
-    cash = 5000 - 1002 * 1.0034 - 1002 * 1.0034  # 10 at 100.20 and 20 at 50.10
+    cash = 5000 - 501 * 1.0034 - 501 * 1.0034  # 5 at 100.20 and 10 at 50.10
     assert first.cash == pytest.approx(cash)
-    assert first.equity == pytest.approx(cash + 10 * 100.8 + 20 * 50.0)
+    assert first.equity == pytest.approx(cash + 5 * 100.8 + 10 * 50.0)
     assert (first.buy, first.entered, first.open_positions) == (3, 2, 2)
     total = sum(t.net_pnl for t in played.trades)
     assert last.equity == pytest.approx(5000 + total)
@@ -445,9 +445,9 @@ def test_replay_report_has_ideas_shadows_and_the_result_against_spy(played, tmp_
     for section in ("## Resultado contra SPY", "## Ideas", "## Sombras (operaciones virtuales)",
                     "## Controles que más bloquearon", "## Tiempos", "## Cómo leer este reporte"):  # fmt: skip
         assert section in text
-    assert "| Capital final | $5,030 | $5,000 |" in text
-    assert "| Rendimiento | +0.60% | +0.00% |" in text
-    assert "Diferencia contra SPY: +0.60 puntos porcentuales." in text
+    assert "| Capital final | $5,017 | $5,000 |" in text
+    assert "| Rendimiento | +0.33% | +0.00% |" in text
+    assert "Diferencia contra SPY: +0.33 puntos porcentuales." in text
     assert "| Todas | 2 | 50% |" in text
     assert "| alcanzó el objetivo 2 | 1 |" in text and "| saltó el stop | 1 |" in text
     assert "| C19 Enfriamiento | 1 |" in text
@@ -566,13 +566,15 @@ def test_replay_with_the_simulated_ai_runs_the_whole_ai_path_without_touching_th
 
     result = simulate(scripted, CONFIG, signals, capital=5000.0, analyst=analyst)
 
-    # The simulated AI mirrors the rules, so the trades are the same as without it.
+    # The simulated AI mirrors the verdicts of the rules, so the same trades happen...
     def summary(trades):
-        return [(t.ticker, t.entry_day, t.exit_day, t.exit_reason, round(t.net_pnl, 2))
-                for t in trades]  # fmt: skip
+        return [(t.ticker, t.entry_day, t.exit_day, t.exit_reason) for t in trades]
 
     assert summary(result.trades) == summary(played.trades)
-    assert [d.equity for d in result.days] == pytest.approx([d.equity for d in played.days])
+    # ...but its probabilities raise the conviction factor, so the positions are larger:
+    # WIN (score 90) gets 0.60 -> factor 1.0; LOSE (score 85) gets 0.575 -> factor 0.875.
+    assert {t.ticker: t.shares for t in result.trades} == {"WIN": 10, "LOSE": 17}
+    assert {t.ticker: t.shares for t in played.trades} == {"WIN": 5, "LOSE": 10}
     assert (result.ai, played.ai) == ("simulated", "none")
     # One call per day with finalists; the 09:45 recheck reuses the morning's review.
     first_day = result.plans[REPLAY_DAYS[0]]
