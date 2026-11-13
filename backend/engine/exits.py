@@ -14,8 +14,10 @@ Golden rule: the stop only moves up, never down.
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import date
+from typing import Any
 
 from core.settings import CostsConfig, ExitsConfig
 
@@ -120,6 +122,36 @@ class ShadowPosition:
             self.stop = level
             return True
         return False
+
+
+def reports_before_next_open(events: Iterable[Any], day: date, next_day: date) -> bool:
+    """True when the company reports on ``day`` after the close or before the open
+    of ``next_day`` (the next session). ``events`` are its corporate events."""
+    for event in events:
+        if event.event_type != "earnings" or event.payload.get("kind") != "scheduled":
+            continue
+        hour = event.payload.get("hour") or ""
+        if event.event_date == day and hour == "amc":
+            return True
+        if event.event_date == next_day and hour in ("bmo", ""):
+            return True
+    return False
+
+
+NOT_FILLABLE_BELOW_STOP = "no ejecutable: abrió debajo del stop"
+NOT_FILLABLE_NEVER_IN_ZONE = "no ejecutable: el precio no volvió a la zona de entrada"
+
+
+def theoretical_entry(entry_max: float, stop: float, bar: Bar) -> tuple[float | None, str]:
+    """Where a limit order at the top of the entry zone would have filled on ``bar``,
+    or None and why it would not."""
+    if bar.open <= stop:
+        return None, NOT_FILLABLE_BELOW_STOP
+    if bar.open <= entry_max:
+        return bar.open, "entró"  # a limit order at the top of the zone fills at the open
+    if bar.low <= entry_max:
+        return entry_max, "entró"  # opened above the zone and came back into it
+    return None, NOT_FILLABLE_NEVER_IN_ZONE
 
 
 def open_position(position: ShadowPosition, costs: CostsConfig) -> Fill:

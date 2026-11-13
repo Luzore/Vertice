@@ -163,16 +163,9 @@ def _earnings_before_next_open(
     data: MarketDataCache, ticker: str, day: date, as_of: datetime
 ) -> bool:
     """True when the company reports today after the close or before tomorrow's open."""
-    tomorrow = market_calendar.next_trading_day(day)
-    for event in data.events_for(ticker, as_of):
-        if event.event_type != "earnings" or event.payload.get("kind") != "scheduled":
-            continue
-        hour = event.payload.get("hour") or ""
-        if event.event_date == day and hour == "amc":
-            return True
-        if event.event_date == tomorrow and hour in ("bmo", ""):
-            return True
-    return False
+    return exits.reports_before_next_open(
+        data.events_for(ticker, as_of), day, market_calendar.next_trading_day(day)
+    )
 
 
 class _Account:
@@ -235,14 +228,9 @@ def _enter(
 ) -> tuple[ShadowPosition | None, str]:
     """Simulate the limit order of a COMPRAR idea on the day's bar."""
     plan = idea.plan
-    if bar.open <= plan.stop:
-        return None, "no ejecutable: abrió debajo del stop"
-    if bar.open <= plan.entry_max:
-        price = bar.open  # a limit order at the top of the zone fills at the open
-    elif bar.low <= plan.entry_max:
-        price = plan.entry_max  # opened above the zone and came back into it
-    else:
-        return None, "no ejecutable: el precio no volvió a la zona de entrada"
+    price, why = exits.theoretical_entry(plan.entry_max, plan.stop, bar)
+    if price is None:
+        return None, why
     shares = idea.shares
     cost = exits.trading_cost(price, shares, config.costs)
     if price * shares + cost > account.cash:

@@ -211,17 +211,25 @@ def c10_regime(ctx: ControlContext) -> tuple[Result, str]:
     return "warn", f"RIESGO ALTO: puntaje {ctx.candidate.score:.0f}, tamaño a la mitad"
 
 
-def c11_gap(ctx: ControlContext) -> tuple[Result, str]:
-    if ctx.opening_price is None or ctx.plan is None:
-        return "pass", "se revisa con el precio de apertura"
-    gap_atr = (ctx.opening_price - ctx.plan.reference) / ctx.plan.atr
-    limit = ctx.config.controls.max_gap_atr
+def opening_gap(
+    opening_price: float, reference: float, atr: float, limit: float
+) -> tuple[Result, str]:
+    """The gap rule on its own, so the 09:45 recheck of a saved plan applies the same one."""
+    gap_atr = (opening_price - reference) / atr
     if gap_atr > limit:
         return (
             "fail",
             f"abrió {gap_atr:.1f} ATR arriba del cierre; el máximo es {limit:g}: no perseguir",
         )
     return "pass", f"abrió a {gap_atr:+.1f} ATR del cierre"
+
+
+def c11_gap(ctx: ControlContext) -> tuple[Result, str]:
+    if ctx.opening_price is None or ctx.plan is None:
+        return "pass", "se revisa con el precio de apertura"
+    return opening_gap(
+        ctx.opening_price, ctx.plan.reference, ctx.plan.atr, ctx.config.controls.max_gap_atr
+    )
 
 
 def c12_extension(ctx: ControlContext) -> tuple[Result, str]:

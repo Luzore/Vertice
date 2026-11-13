@@ -9,10 +9,15 @@ C21 and the controls veto the AI, not the other way round (principle 5).
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from db import models
 from engine.ai_client import TASK_NEWS
 from engine.ai_gateway import AIGateway
 from engine.dossier import NEWS_BATCH_SIZE, build_news_dossier
@@ -81,3 +86,61 @@ def refine(item: NewsItem, classification: NewsClassification) -> NewsItem:
         category = _SPECIAL_FROM_AI[classification.category]
     sentiment = min(classification.sentiment, 0.0) if severe else classification.sentiment
     return item.model_copy(update={"sentiment": sentiment, "category": category, "severe": severe})
+
+
+MAX_BATCHES_PER_RUN = 4
+
+
+def refine_recent_news(
+    session: Session,
+    gateway: AIGateway,
+    tickers: Collection[str],
+    *,
+    since: datetime,
+    until: datetime,
+    max_batches: int = MAX_BATCHES_PER_RUN,
+) -> tuple[dict[str, NewsItem], str]:
+    """Classify with the AI the recent headlines of ``tickers`` that it has not seen
+    yet, newest first, and store the result. Returns the refined items by URL and,
+    when the AI could not be used, why."""
+    wanted = set(tickers)
+    rows = [
+        row
+        for row in session.scalars(
+            select(models.News)
+            .where(
+                models.News.published_at > since,
+                models.News.published_at <= until,
+                models.News.classified_by.is_(None),
+            )
+            .order_by(models.News.published_at.desc())
+        )
+        if wanted & set(row.tickers or ())
+    ][: max_batches * NEWS_BATCH_SIZE]
+    if not rows:
+        return {}, ""
+    items = {
+        row.id: NewsItem(
+            tickers=tuple(row.tickers or ()),
+            published_at=row.published_at,
+            source=row.source,
+            headline=row.headline,
+            summary=row.summary,
+            url=row.url,
+            sentiment=row.sentiment,
+            category=row.category,
+            severe=row.severe,
+        )
+        for row in rows
+    }
+    classified, note = classify_news(gateway, list(items.items()))
+    refined: dict[str, NewsItem] = {}
+    for row in rows:
+        if row.id not in classified:
+            continue
+        item = refine(items[row.id], classified[row.id])
+        row.sentiment, row.category, row.severe = item.sentiment, item.category, item.severe
+        row.classified_by = "ai"
+        if row.url:
+            refined[row.url] = item
+    return refined, note

@@ -184,6 +184,8 @@ class News(Base):
     category: Mapped[str | None] = mapped_column(Text)
     severe: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("0"))
     fetched_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    # "ai" once the AI classifier refined the rule-based sentiment; NULL until then.
+    classified_by: Mapped[str | None] = mapped_column(Text)
 
 
 class MacroPoint(Base):
@@ -379,6 +381,11 @@ class Idea(Base):
     )
     state: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'PROPOSED'"))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    # Why the idea is not a COMPRAR, in Spanish; empty when it is.
+    reason: Mapped[str | None] = mapped_column(Text)
+    # What the plan shows besides the columns above: name, sector, position in the list,
+    # facts behind the setup, size factors, corrections to the AI's levels.
+    details: Mapped[Any | None] = mapped_column(JSONText)
 
 
 class Position(Base):
@@ -411,6 +418,9 @@ class Position(Base):
     state: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'OPEN'"))
     opened_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
     closed_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    # What the exit rules need to remember between days: ATR at entry, highest price
+    # seen, days held, whether the first target was sold, initial shares.
+    tracking: Mapped[Any | None] = mapped_column(JSONText)
 
 
 class Fill(Base):
