@@ -470,6 +470,12 @@ class Alert(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
     resolved_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     resolution: Mapped[str | None] = mapped_column(Text)
+    # What the alert shows and suggests: price with its source and time, result so
+    # far, suggested action, quantity to sell or new stop.
+    data: Mapped[Any | None] = mapped_column(JSONText)
+    # How many times it was sent to the user, and when last (ALTA alerts repeat).
+    notified_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    last_notified_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
 
 class Confirmation(Base):

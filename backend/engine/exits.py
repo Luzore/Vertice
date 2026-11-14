@@ -229,7 +229,7 @@ def apply_bar(
             )
             return fills
         # Rule 4: trailing stop once the trade has gone far enough in its favour.
-        if position.best_r >= exits.trailing_start_r:
+        if position.best_r >= exits.trailing_start_r - 1e-9:
             position.raise_stop(position.highest - exits.trailing_atr_mult * position.atr)
 
     if not position.is_open:
@@ -242,7 +242,10 @@ def apply_bar(
     if regime == "RIESGO_ALTO" and position.r_multiple(bar.close) < 1:
         position.raise_stop(bar.close - position.atr)
     # Rule 9: time stop for a trade that goes nowhere.
-    if position.days_held >= exits.time_stop_days and position.best_r < exits.time_stop_min_r:
+    if (
+        position.days_held >= exits.time_stop_days
+        and position.best_r < exits.time_stop_min_r - 1e-9
+    ):
         fills.append(_sell(position, bar, bar.close, position.shares_open, TIME_STOP, costs))
         return fills
     # Rule 10: the horizon of the idea.

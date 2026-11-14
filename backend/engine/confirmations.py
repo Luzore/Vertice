@@ -6,7 +6,9 @@ what happened:
 * **"La compré"** creates the real position with the price actually paid, and
   recalculates R from it.
 * **"No la compré"** leaves the idea to be followed as a shadow.
-* **"Vendí"** records a partial or total sale.
+* **"Vendí"** records a partial or total sale, and answers the alert that asked for it.
+* **"Ya subí el stop"** moves the stop up (never down); **"Ignorar"** dismisses an
+  alert with a reason.
 * At the close, ideas nobody answered become shadows too, when the price did
   reach the entry zone that day; otherwise they are "not fillable".
 
@@ -26,8 +28,8 @@ from sqlalchemy.orm import Session
 from core import clock, market_calendar
 from core.settings import AppConfig
 from db import models
-from engine import exits, states
-from engine.account import fills_of, is_voided
+from engine import exits, states, watcher
+from engine.account import fills_of, is_voided, net_result
 from engine.plan_store import todays_ideas
 
 DEFAULT_HORIZON_DAYS = 10
@@ -320,6 +322,51 @@ def confirm_declined(
 # --- "Vendí" -----------------------------------------------------------------------------------
 
 
+# Why a sale happened, from the rule of the alert it answers (the cooldown reads "stop").
+_SALE_REASONS = {
+    watcher.STOP: "stop",
+    watcher.TARGET_1: "objetivo",
+    watcher.TARGET_2: "objetivo",
+    watcher.TIME: "tiempo",
+    watcher.HORIZON: "tiempo",
+    watcher.EARNINGS: "resultados",
+}
+
+
+def _alert(session: Session, alert_id: int) -> models.Alert:
+    alert = session.get(models.Alert, alert_id)
+    if alert is None:
+        raise NotFound(f"no existe la alerta {alert_id}")
+    if alert.resolved_at is not None:
+        raise ConfirmationError(f"la alerta {alert_id} ya fue resuelta: {alert.resolution}")
+    return alert
+
+
+def _settle_alert_state(session: Session, position: models.Position, *, actor: str) -> None:
+    """A position leaves SELL_ALERT once no sell alert is waiting for an answer."""
+    if position.state != "SELL_ALERT":
+        return
+    waiting = [
+        a for a in watcher.open_alerts(session, position.id) if watcher.RULES[a.rule].kind == "sell"
+    ]
+    if waiting:
+        return
+    initial = (position.tracking or {}).get("initial_shares") or position.qty_open
+    back_to = "PARTIALLY_CLOSED" if position.qty_open < initial - 1e-9 else "OPEN"
+    states.transition(
+        session, "position", position, back_to, actor=actor, reason="alertas de venta resueltas"
+    )
+
+
+def _resolve(session: Session, alert: models.Alert, resolution: str) -> None:
+    alert.resolved_at, alert.resolution = clock.now(), resolution
+    if alert.rule == watcher.TARGET_1:
+        # Answered once, the first target does not ask again.
+        position = session.get(models.Position, alert.position_id)
+        position.tracking = {**(position.tracking or {}), "target_1_done": True}
+    session.flush()
+
+
 def confirm_sold(
     session: Session,
     position_id: int,
@@ -330,8 +377,10 @@ def confirm_sold(
     commission: float = 0.0,
     reason: str | None = None,
     note: str | None = None,
+    alert_id: int | None = None,
 ) -> models.Position:
-    """The user sold part or all of a real position."""
+    """The user sold part or all of a real position. ``alert_id`` is the alert this
+    sale answers, if any; closing the position resolves all of its alerts."""
     position = session.get(models.Position, position_id)
     if position is None or position.is_shadow or is_voided(position):
         raise NotFound(f"no existe la posición real {position_id}")
@@ -345,19 +394,30 @@ def confirm_sold(
         raise ConfirmationError(
             f"quieres registrar la venta de {qty:g} acciones y solo quedan {position.qty_open:g}"
         )
+    alert = _alert(session, alert_id) if alert_id is not None else None
+    if alert is not None and alert.position_id != position.id:
+        raise ConfirmationError(f"la alerta {alert_id} no es de esta posición")
+    if reason is None and alert is not None:
+        reason = _SALE_REASONS.get(alert.rule, watcher.RULES[alert.rule].name.lower())
     filled_at = clock.ensure_utc(filled_at) if filled_at is not None else clock.now()
     remaining = round(position.qty_open - qty, 6)
     closing = remaining <= 1e-9
-    target = "CLOSED" if closing else "PARTIALLY_CLOSED"
-    if position.state != target:
-        states.transition(
-            session,
-            "position",
-            position,
-            target,
-            actor="user",
-            reason=f"Vendí {qty:g} a ${price:,.2f}" + (f" ({reason})" if reason else ""),
+    what = f"Vendí {qty:g} a ${price:,.2f}" + (f" ({reason})" if reason else "")
+
+    answered = watcher.open_alerts(session, position.id) if closing else ([alert] if alert else [])
+    for item in answered:
+        _resolve(session, item, f"vendido: {qty:g} a ${price:,.2f}")
+    if closing:
+        states.transition(session, "position", position, "CLOSED", actor="user", reason=what)
+    else:
+        still_asking = any(
+            watcher.RULES[a.rule].kind == "sell" for a in watcher.open_alerts(session, position.id)
         )
+        waits_in_alert = position.state == "SELL_ALERT" and still_asking
+        if not waits_in_alert and position.state != "PARTIALLY_CLOSED":
+            states.transition(
+                session, "position", position, "PARTIALLY_CLOSED", actor="user", reason=what
+            )
     fill = models.Fill(
         position_id=position.id,
         side="sell",
@@ -372,26 +432,136 @@ def confirm_sold(
     if closing:
         position.closed_at = filled_at
     session.flush()
+
+    # The real result: R with the price actually paid, and dollars net of commissions.
+    fills = fills_of(session, [position.id]).get(position.id, [])
+    bought = sum(f.qty for f in fills if f.side == "buy")
+    buy_commissions = sum(f.commission for f in fills if f.side == "buy")
+    data = {
+        "fill_id": fill.id,
+        "ticker": position.ticker,
+        "price": price,
+        "qty": qty,
+        "commission": commission,
+        "reason": reason,
+        "alert_id": alert.id if alert is not None else None,
+        "day": clock.market_date(filled_at).isoformat(),
+        "filled_at": filled_at.isoformat(),
+        "r_multiple": round((price - position.avg_price) / position.initial_r, 3),
+        "net_usd": round(
+            (price - position.avg_price) * qty - commission - buy_commissions * qty / bought, 2
+        ),
+    }
+    if closing:
+        total = net_result(fills)
+        data["position_net_usd"] = round(total, 2)
+        data["position_r"] = round(total / (position.initial_r * bought), 3)
     session.add(
         models.Confirmation(
             kind="sold",
             idea_id=position.idea_id,
             position_id=position.id,
-            data={
-                "fill_id": fill.id,
-                "ticker": position.ticker,
-                "price": price,
-                "qty": qty,
-                "commission": commission,
-                "reason": reason,
-                "day": clock.market_date(filled_at).isoformat(),
-                "filled_at": filled_at.isoformat(),
-            },
+            alert_id=alert.id if alert is not None else None,
+            data=data,
             note=note,
             created_at=clock.now(),
         )
     )
+    # After the first target the rest is protected at the entry price: say so.
+    suggested = (alert.data or {}).get("new_stop") if alert is not None else None
+    after_first_target = not closing and alert is not None and alert.rule == watcher.TARGET_1
+    if after_first_target and suggested and suggested > position.stop:
+        watcher.raise_alert(
+            session,
+            position,
+            watcher.Signal(
+                watcher.TRAILING,
+                f"Sube tu stop a ${suggested:,.2f}",
+                "ya vendiste en el objetivo 1: el resto se protege en tu precio de entrada",
+                f"tu stop sigue en ${position.stop:,.2f} y puedes devolver la ganancia",
+                new_stop=suggested,
+            ),
+            price=price,
+            source="tu venta",
+            at=clock.now(),
+        )
     return position
+
+
+# --- "Ya subí el stop" and "Ignorar" -----------------------------------------------------------
+
+
+def confirm_stop_raised(
+    session: Session,
+    position_id: int,
+    *,
+    new_stop: float | None = None,
+    alert_id: int | None = None,
+    note: str | None = None,
+) -> models.Position:
+    """The user moved their stop up. Without ``new_stop`` the level the alert
+    suggested is used. The stop never moves down."""
+    position = session.get(models.Position, position_id)
+    if position is None or position.is_shadow or is_voided(position) or position.state == "CLOSED":
+        raise NotFound(f"no existe la posición real abierta {position_id}")
+    alert = _alert(session, alert_id) if alert_id is not None else None
+    if alert is not None and alert.position_id != position.id:
+        raise ConfirmationError(f"la alerta {alert_id} no es de esta posición")
+    if new_stop is None and alert is not None:
+        new_stop = (alert.data or {}).get("new_stop")
+    if new_stop is None:
+        raise ConfirmationError("falta el nuevo precio del stop")
+    if new_stop <= position.stop:
+        raise ConfirmationError(
+            f"el stop solo sube: el actual es ${position.stop:,.2f} y quieres ponerlo en "
+            f"${new_stop:,.2f}"
+        )
+    before = position.stop
+    position.stop = float(new_stop)
+    session.add(
+        models.Confirmation(
+            kind="stop_raised",
+            idea_id=position.idea_id,
+            position_id=position.id,
+            alert_id=alert.id if alert is not None else None,
+            data={"ticker": position.ticker, "from": before, "to": position.stop},
+            note=note,
+            created_at=clock.now(),
+        )
+    )
+    if alert is not None and watcher.RULES[alert.rule].kind in ("stop", "either"):
+        _resolve(session, alert, f"stop subido a ${position.stop:,.2f}")
+        _settle_alert_state(session, position, actor="user")
+    return position
+
+
+def ignore_alert(
+    session: Session, alert_id: int, *, reason: str | None = None, note: str | None = None
+) -> models.Alert:
+    """The user dismisses an alert. The position stays as it is; the same rule does
+    not ask again today (a stop still breached tomorrow asks again)."""
+    alert = _alert(session, alert_id)
+    position = session.get(models.Position, alert.position_id)
+    tracking = dict(position.tracking or {})
+    tracking["ignored"] = {
+        **(tracking.get("ignored") or {}),
+        alert.rule: clock.market_date(clock.now()).isoformat(),
+    }
+    position.tracking = tracking
+    _resolve(session, alert, f"ignorada: {reason}" if reason else "ignorada")
+    _settle_alert_state(session, position, actor="user")
+    session.add(
+        models.Confirmation(
+            kind="declined",
+            idea_id=position.idea_id,
+            position_id=position.id,
+            alert_id=alert.id,
+            data={"ticker": position.ticker, "rule": alert.rule, "reason": reason},
+            note=note,
+            created_at=clock.now(),
+        )
+    )
+    return alert
 
 
 # --- shadows -----------------------------------------------------------------------------------
