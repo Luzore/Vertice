@@ -62,6 +62,10 @@ MAX_REJECTED_LISTED = 5
 # Controls that only say "there is no room or no cash": an idea blocked by nothing
 # else can still be worth a rotation.
 ROOM_CONTROLS = frozenset({"C15", "C18"})
+# Why an idea is only watched. The watcher can turn the first group into a purchase
+# when the price confirms; the others need more than a price.
+WATCH_PRICE, WATCH_EXPECTANCY, WATCH_CASH, WATCH_ROOM = "price", "expectancy", "cash", "room"
+PROMOTABLE_WATCH_KINDS = frozenset({WATCH_PRICE, WATCH_EXPECTANCY, WATCH_CASH, WATCH_ROOM})
 
 
 @dataclass(frozen=True)
@@ -93,6 +97,8 @@ class Idea:
     # Factors applied to the base risk (conviction, controls, streak) and what capped the size.
     multipliers: dict[str, float] = field(default_factory=dict)
     limited_by: str | None = None
+    # For a VIGILAR idea: what it is waiting for (price, expectancy, cash, room, score...).
+    watch_kind: str | None = None
 
     @property
     def ev_r(self) -> float | None:
@@ -200,23 +206,25 @@ def _rule_verdict(
     profile: RiskProfile,
     config: AppConfig,
     opening_price: float | None,
-) -> tuple[str, str, str | None]:
-    """Verdict, reason and watch trigger of a candidate no control blocked."""
+) -> tuple[str, str, str | None, str | None]:
+    """Verdict, reason, watch trigger and what it waits for, of a candidate no control
+    blocked."""
     if config.system.mode != "recommend":
-        return "VIGILAR", "el sistema está en modo solo vigilar: no propone compras", None
+        reason = "el sistema está en modo solo vigilar: no propone compras"
+        return "VIGILAR", reason, None, "blocked"
     if candidate.score < profile.min_score - WATCH_MARGIN:
         reason = f"puntaje {candidate.score:.0f}; el mínimo es {profile.min_score:.0f}"
-        return "NO_HOY", reason, None
+        return "NO_HOY", reason, None, None
     if candidate.score < profile.min_score:
         reason = f"puntaje {candidate.score:.0f}, cerca del mínimo de {profile.min_score:.0f}"
-        return "VIGILAR", reason, _watch_trigger(candidate, plan)
+        return "VIGILAR", reason, _watch_trigger(candidate, plan), "score"
     if opening_price is not None and plan is not None and opening_price > plan.no_chase_above:
         reason = (
             f"abrió en ${opening_price:,.2f}, arriba del precio de no perseguir "
             f"(${plan.no_chase_above:,.2f})"
         )
-        return "VIGILAR", reason, _watch_trigger(candidate, plan)
-    return "COMPRAR", "", None
+        return "VIGILAR", reason, _watch_trigger(candidate, plan), WATCH_PRICE
+    return "COMPRAR", "", None, None
 
 
 def _ai_discard_reason(decision: AIDecision) -> str:
@@ -349,17 +357,22 @@ def build_plan(
         opening = opening_prices.get(ticker)
         decision = decisions.get(ticker) if decisions is not None else None
         trigger: str | None = None
+        kind: str | None = None
         if candidate.setup is None:
             verdict, reason = "NO_HOY", "sin setup de compra"
         elif ctl.is_blocked(results):
             verdict, reason = "NO_HOY", "; ".join(ctl.blocking_reasons(results))
         elif decisions is None:
-            verdict, reason, trigger = _rule_verdict(candidate, plan, profile, config, opening)
+            verdict, reason, trigger, kind = _rule_verdict(
+                candidate, plan, profile, config, opening
+            )
         elif decision is None:
             # The AI only sees the best finalists; the rest can be watched, not bought.
-            verdict, reason, trigger = _rule_verdict(candidate, plan, profile, config, opening)
+            verdict, reason, trigger, kind = _rule_verdict(
+                candidate, plan, profile, config, opening
+            )
             if verdict == "COMPRAR":
-                verdict, trigger = "VIGILAR", _watch_trigger(candidate, plan)
+                verdict, trigger, kind = "VIGILAR", _watch_trigger(candidate, plan), "not_reviewed"
                 reason = (
                     f"no entró entre los {config.screener.max_finalists} finalistas que "
                     "analizó la IA"
@@ -373,12 +386,22 @@ def build_plan(
             if ctl.is_blocked(results):
                 verdict, reason = "NO_HOY", "; ".join(ctl.blocking_reasons(results))
             else:
-                verdict, reason, trigger = _rule_verdict(candidate, plan, profile, config, opening)
+                verdict, reason, trigger, kind = _rule_verdict(
+                    candidate, plan, profile, config, opening
+                )
                 if verdict == "COMPRAR" and decision.verdict == "VIGILAR":
-                    verdict, reason = "VIGILAR", "la IA pide esperar una confirmación"
+                    verdict, reason, kind = (
+                        "VIGILAR",
+                        "la IA pide esperar una confirmación",
+                        WATCH_PRICE,
+                    )
                     trigger = decision.watch_trigger or _watch_trigger(candidate, plan)
                 elif verdict == "COMPRAR" and decision.probability < profile.min_probability:
-                    verdict, trigger = "VIGILAR", _watch_trigger(candidate, plan)
+                    verdict, trigger, kind = (
+                        "VIGILAR",
+                        _watch_trigger(candidate, plan),
+                        "probability",
+                    )
                     reason = (
                         f"la IA estima {decision.probability:.0%} de probabilidad de tocar el "
                         f"objetivo antes que el stop; el mínimo es {profile.min_probability:.0%}"
@@ -393,13 +416,17 @@ def build_plan(
                     probability = min(1.0, max(0.0, calibrate(probability)))
             outlook = expectancy(plan, probability, profile.min_probability, config.costs)
             if verdict == "COMPRAR" and not outlook.passes:
-                verdict, trigger = "VIGILAR", _watch_trigger(candidate, plan)
+                verdict, trigger, kind = (
+                    "VIGILAR",
+                    _watch_trigger(candidate, plan),
+                    WATCH_EXPECTANCY,
+                )
                 reason = (
                     f"expectativa de {outlook.ev_r:+.2f}R después de costos; "
                     f"el mínimo es +{MIN_EV_R:.2f}R"
                 )
         if verdict == "COMPRAR" and brake is not None and not brake.allows_buying:
-            verdict, trigger = "VIGILAR", _watch_trigger(candidate, plan)
+            verdict, trigger, kind = "VIGILAR", _watch_trigger(candidate, plan), "blocked"
             reason = f"freno automático: {brake.text}"
         # An idea that only lacks room or cash is a candidate for a rotation.
         blocked_by = {r.id for r in results if r.effect == "block"}
@@ -429,6 +456,7 @@ def build_plan(
                 notes=tuple(candidate.notes),
                 size_multiplier=ctl.size_multiplier(results),
                 watch_trigger=trigger,
+                watch_kind=kind if verdict == "VIGILAR" else None,
                 no_ai=decision is None,
                 metrics=candidate.metrics,
                 ai=decision,
@@ -452,7 +480,10 @@ def build_plan(
         if portfolio.holds(idea.ticker):
             sized.append(
                 replace(
-                    idea, verdict="VIGILAR", reason="ya tienes una posición abierta en este ticker"
+                    idea,
+                    verdict="VIGILAR",
+                    reason="ya tienes una posición abierta en este ticker",
+                    watch_kind="held",
                 )
             )
             continue
@@ -464,6 +495,7 @@ def build_plan(
                     verdict="VIGILAR",
                     reason=f"sin espacio: el límite es de {profile.max_positions} posiciones",
                     watch_trigger=_watch_trigger(_as_candidate(idea), idea.plan),
+                    watch_kind=WATCH_ROOM,
                 )
             )
             continue
@@ -482,6 +514,7 @@ def build_plan(
         if size.shares <= 0:
             step = 0.01 if config.capital.fractional_shares else 1.0
             risk_per_share = worst_case_risk(idea.plan)
+            waits_for = "size"
             if size.risk_budget < risk_per_share * step:
                 # The account is too small for even one share at this risk per idea.
                 why = (
@@ -489,11 +522,19 @@ def build_plan(
                     f"para una acción (riesgo por acción ${risk_per_share:,.2f})"
                 )
             elif size.limited_by == "efectivo disponible":
-                why = "COMPRAR si liberas efectivo"
+                why, waits_for = "COMPRAR si liberas efectivo", WATCH_CASH
                 waiting.append((idea.ticker, idea.ev_r))
             else:
                 why = f"el {size.limited_by} no alcanza para una acción"
-            sized.append(replace(idea, verdict="VIGILAR", reason=why, multipliers=size.multipliers))
+            sized.append(
+                replace(
+                    idea,
+                    verdict="VIGILAR",
+                    reason=why,
+                    multipliers=size.multipliers,
+                    watch_kind=waits_for,
+                )
+            )
             continue
         cash -= size.amount
         slots -= 1

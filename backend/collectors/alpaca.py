@@ -161,6 +161,38 @@ class AlpacaCollector(Collector):
             ),
         )
 
+    async def snapshots(
+        self, symbols: Iterable[str], *, as_of: datetime | None = None
+    ) -> RawSnapshot:
+        """Latest trade, latest quote and today's bar per symbol (IEX): what the
+        watcher polls when the price stream is not available."""
+        tickers = _normalize(symbols)
+
+        async def fetch(requests: _Requests) -> dict:
+            merged: dict[str, dict] = {}
+            for chunk in _chunks(tickers, _SYMBOLS_PER_REQUEST):
+                page = await requests.get_json(
+                    f"{DATA_URL}/v2/stocks/snapshots",
+                    params={"symbols": ",".join(chunk), "feed": "iex"},
+                    headers=self._headers(),
+                )
+                merged.update(page or {})
+            return {"feed": "iex", "snapshots": merged}
+
+        return await self._collect(
+            "snapshots",
+            request_key(symbols=tickers),
+            fetch,
+            as_of=as_of,
+            freshness=freshness.quotes(
+                lambda payload: {
+                    symbol: row.get("latestTrade") or {}
+                    for symbol, row in payload["snapshots"].items()
+                },
+                max_age_s=self.runtime.config.stale.quote_max_age_s,
+            ),
+        )
+
     async def assets(self, *, as_of: datetime | None = None) -> RawSnapshot:
         """Every active US equity Alpaca knows; the universe is built from this list."""
 

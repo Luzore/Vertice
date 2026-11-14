@@ -118,7 +118,7 @@ data:
       limit_period_s: 60
       timeout_s: 20
       critical: true
-      cache_ttl_s: {daily_bars: 600, intraday_bars: 60, latest_quotes: 0, news: 120, assets: 86400, corporate_actions: 21600}
+      cache_ttl_s: {daily_bars: 600, intraday_bars: 60, latest_quotes: 0, snapshots: 0, news: 120, assets: 86400, corporate_actions: 21600}
     finnhub:
       limit_calls: 60
       limit_period_s: 60

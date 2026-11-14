@@ -38,6 +38,7 @@ def _idea_details(idea: Idea, rank: int) -> dict[str, Any]:
         "size_multiplier": idea.size_multiplier,
         "multipliers": idea.multipliers,
         "limited_by": idea.limited_by,
+        "watch_kind": idea.watch_kind,
         "warnings": [f"{c.id} {c.reason}" for c in idea.controls if c.effect == "reduce"],
     }
     if plan is not None:
@@ -272,6 +273,8 @@ def recheck_open(
         )
         idea.verdict, idea.reason = verdict, reason
         idea.shares, idea.amount_usd, idea.risk_usd = 0.0, 0.0, 0.0
+        # Opened too high: it comes back if the price returns under its no-chase level.
+        idea.details = {**details, "watch_kind": "price" if verdict == "VIGILAR" else None}
         changed.append((idea.ticker, verdict, reason))
     return changed
 

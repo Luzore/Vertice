@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 from datetime import date, time, timedelta
 
 import pytest
@@ -13,11 +12,8 @@ from db import models
 from db.session import session_scope
 from engine import account, daily, plan_store
 from engine.ai_analyst import simulated_analyst
-from engine.indicators import Levels
 from engine.risk_profile import profile_for
-from engine.screener import Candidate
 from tests.conftest import SHIPPED_CONFIG
-from tests.test_screener_plan import STRONG
 
 CONFIG = settings.load_config(SHIPPED_CONFIG)
 DAY = date(2026, 11, 11)  # a Wednesday with two more sessions after it in the data
@@ -28,41 +24,6 @@ PUBLISH = clock.market_time(DAY, time(9, 0))
 def _at_publication_time():
     with clock.simulated(PUBLISH) as simulated:
         yield simulated
-
-
-@pytest.fixture
-def busy(market, monkeypatch):
-    """The synthetic market with eight breakout candidates built on its real prices,
-    so the daily runs have purchases, rechecks and shadows to work with (a random
-    walk on its own never passes the 22 controls)."""
-    real_indicators = daily.compute_indicators
-
-    def indicators_with_levels(state, regime_config):
-        result = real_indicators(state, regime_config)
-        levels = {
-            ticker: Levels(supports=(round(float(result.metrics.loc[ticker, "close"]) * 0.968, 2),))
-            for ticker in list(result.metrics.index)[:8]
-        }
-        return replace(result, levels={**result.levels, **levels}, regime="ALCISTA")
-
-    def breakouts(indicators, screener_config):
-        candidates = []
-        for rank, ticker in enumerate(list(indicators.metrics.index)[:8]):
-            close = float(indicators.metrics.loc[ticker, "close"])
-            metrics = {
-                **STRONG, "close": close, "atr_14": close * 0.02, "atr_pct": 2.0,
-                "sma_20": close * 0.992, "ema_21": close * 0.992, "sma_50": close * 0.92,
-                "sma_200": close * 0.8, "prior_close_max_20d": close * 0.99, "extension_atr": 0.4,
-            }  # fmt: skip
-            candidates.append(
-                Candidate(ticker, "RUPTURA", 90.0 - rank, {"tendencia": 25.0},
-                          ["rompe máximo de 20 días"], metrics)
-            )  # fmt: skip
-        return candidates
-
-    monkeypatch.setattr(daily, "compute_indicators", indicators_with_levels)
-    monkeypatch.setattr(daily, "screen", breakouts)
-    return market
 
 
 def saved_ideas(engine, day: date = DAY) -> list[models.Idea]:

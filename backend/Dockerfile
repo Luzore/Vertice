@@ -20,8 +20,8 @@ COPY config/ /app/config/
 
 # Run as an unprivileged user; the database lives in /app/data (a volume).
 RUN useradd --create-home --uid 1000 vertice \
-    && mkdir -p /app/data \
-    && chown -R vertice:vertice /app/data
+    && mkdir -p /app/data /app/runs \
+    && chown -R vertice:vertice /app/data /app/runs
 USER vertice
 
 ENV DATABASE_URL=sqlite:////app/data/vertice.db

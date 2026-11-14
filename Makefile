@@ -1,6 +1,6 @@
 # VERTICE developer commands. Run `make` to list them.
 .DEFAULT_GOAL := help
-.PHONY: help install migrate dev test check data replay preview plan recheck close lint format
+.PHONY: help install migrate dev worker test check data replay preview plan recheck close lint format
 
 BACKEND := backend
 UV_RUN := cd $(BACKEND) && uv run --frozen
@@ -16,6 +16,9 @@ migrate: ## Create or upgrade the database schema
 
 dev: migrate ## Run the API locally with auto-reload on http://127.0.0.1:8000
 	$(UV_RUN) uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+
+worker: migrate ## Run the scheduler and the watcher (daily tasks, live prices, Telegram)
+	$(UV_RUN) python -m scheduler
 
 test: ## Run the whole test suite
 	$(UV_RUN) pytest
