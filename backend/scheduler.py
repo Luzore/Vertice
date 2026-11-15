@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import signal
 import sys
 from datetime import date
@@ -108,6 +109,8 @@ def build_scheduler(service: Service, config: AppConfig) -> AsyncIOScheduler:
 async def serve() -> None:
     config = settings.get_config()
     configure_logging(secret_values=settings.get_secrets().secret_values())
+    # The scheduler announces every run of every job; only its problems matter here.
+    logging.getLogger("apscheduler").setLevel(logging.WARNING)
     engine = make_engine()
     service, stream, runtimes = build_service(config, engine)
     scheduler = build_scheduler(service, config)

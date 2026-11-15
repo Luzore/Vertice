@@ -14,7 +14,7 @@ Es un experimento educativo y medible, no asesoría financiera. La especificaci�
 | 3 | Filtro, 22 controles, Plan del día por reglas y modo replay | Terminada |
 | 4 | Analista IA: dossier, Claude Code en modo headless, validación, presupuesto y caché | Terminada |
 | 5 | Motor de riesgo, Plan del día guardado, confirmaciones "La compré / No la compré", sombras y máquina de estados | Terminada |
-| 6 | Vigilante y alertas | Pendiente |
+| 6 | Vigilante: 11 reglas de salida, alertas sin duplicados, Telegram con botones, precios en vivo y programador diario | Terminada |
 | 7 | Dashboard | Pendiente |
 | 8 | Aprendizaje y métricas | Pendiente |
 | 9 | Despliegue y periodo en papel | Pendiente |
@@ -73,12 +73,29 @@ make close
 
 `make plan` arma y guarda el Plan del día con tu cuenta real (efectivo y posiciones confirmadas). `make recheck` es la revisión de las 9:45: una compra que abrió arriba de su precio de "no perseguir" pasa a VIGILAR. `make close` cierra el día: las ideas que no contestaste se siguen como sombras y se registra tu capital.
 
+El proceso que hace todo eso solo, a su hora, y vigila tus posiciones durante la sesión:
+
+```bash
+make worker
+```
+
+Lanza las tareas del día (colectores 6:00, plan 8:45, publicación 9:00, revisión 9:45, revisión de cierre 30 minutos antes del cierre y cierre 15 minutos después, hora de Nueva York), revisa los precios cada 10 segundos y atiende lo que contestes en Telegram. Si lo detienes y lo vuelves a arrancar, sigue donde iba: no repite tareas ni alertas.
+
+Para comprobar que los mensajes llegan a tu chat de Telegram:
+
+```bash
+make telegram-test
+```
+
+En Telegram, cada compra del plan trae los botones "La compré" y "No la compré", y cada alerta de venta trae "Vendí", "Ya subí el stop" o "Ignorar". Comandos del bot: `/plan`, `/estado`, `/pendientes`.
+
 Con `make dev` corriendo, el plan y las confirmaciones están en la API:
 
 - `GET /api/plan`: el plan de hoy.
 - `POST /api/ideas/{id}/bought` con precio y cantidad: "La compré".
 - `POST /api/ideas/{id}/declined`: "No la compré".
 - `POST /api/positions/{id}/sold`: "Vendí" (parcial o total).
+- `GET /api/alerts`, `POST /api/alerts/{id}/ignore`, `POST /api/positions/{id}/stop-raised`.
 - `GET /api/account`, `GET /api/positions`, `GET /api/status`.
 
 El sistema nunca envía órdenes: solo registra lo que tú le dices que hiciste.
@@ -95,6 +112,8 @@ El sistema nunca envía órdenes: solo registra lo que tú le dices que hiciste.
 - `prompts/` y `schemas/`: las instrucciones que recibe la IA y el formato JSON que debe devolver.
 - `runs/`: dossiers enviados a la IA, la carpeta vacía desde la que corre (`ai_sandbox/`) y los reportes de replay. No se sube a git.
 - `backend/replay/`: corre días pasados con reloj simulado y compara el resultado con SPY.
+- `backend/notify/`: mensajes y bot de Telegram.
+- `backend/scheduler.py`: el proceso que lanza las tareas del día y el vigilante.
 - `backend/db/`: tablas y migraciones. La base vive en `data/vertice.db`.
 - `data/raw/`: respuestas crudas de las fuentes, comprimidas, por 30 días.
 - `backend/tests/`: tests de cada pieza.

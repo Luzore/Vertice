@@ -1,12 +1,12 @@
 # VERTICE developer commands. Run `make` to list them.
 .DEFAULT_GOAL := help
-.PHONY: help install migrate dev worker test check data replay preview plan recheck close lint format
+.PHONY: help install migrate dev worker test check telegram-test data replay preview plan recheck close lint format
 
 BACKEND := backend
 UV_RUN := cd $(BACKEND) && uv run --frozen
 
 help: ## List the available commands
-	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  make %-10s %s\n", $$1, $$2}'
+	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  make %-14s %s\n", $$1, $$2}'
 
 install: ## Install the pinned backend dependencies
 	cd $(BACKEND) && uv sync --frozen
@@ -25,6 +25,9 @@ test: ## Run the whole test suite
 
 check: ## Test every data source with a real request and show its status
 	$(UV_RUN) python -m collectors.check
+
+telegram-test: ## Send one test message to your Telegram chat
+	$(UV_RUN) python -m notify.check
 
 data: migrate ## Download universe, two years of daily bars and macro data (takes minutes)
 	$(UV_RUN) python -m engine.ingest all

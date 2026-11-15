@@ -75,6 +75,14 @@ Cualquier cambio de código que rompa estas reglas es un bug, aunque "funcione".
 - **2026-11-13 · Plan repetido el mismo día.** Un plan nuevo reemplaza al del día mientras nadie lo haya contestado; después ya no se puede reemplazar.
 - **2026-11-13 · Transición inválida.** No se aplica nada de esa operación y queda un incidente que pone el sistema en PRECAUCIÓN hasta que el usuario lo resuelve. Repetir "no la compré" sobre una idea ya rechazada no cuenta como incidente.
 
+- **2026-11-14 · Vigilante y posiciones reales.** El vigilante nunca mueve un stop ni cierra nada: avisa y espera "Vendí", "Ya subí el stop" o "Ignorar". El stop de una posición real solo cambia cuando el usuario dice que lo subió. Una alerta de venta deja la posición en SELL_ALERT hasta que se contesta. Ignorar una alerta la calla ese día; un stop que sigue roto al día siguiente vuelve a avisar.
+- **2026-11-14 · Alertas.** Una por posición y regla (un índice único en la base lo impide). Las ALTA se repiten cada 5 minutos, 3 veces. Stop, objetivos, stop móvil y régimen se evalúan con cada precio, como máximo cada 10 s por ticker; resultados, invalidación numérica, tiempo y horizonte, en la revisión de 30 minutos antes del cierre. El stop móvil solo pide subir el stop si mejora al menos 0.25 ATR.
+- **2026-11-14 · Precios en vivo.** WebSocket de Alpaca (IEX, hasta 30 símbolos) y, si no conecta, consulta por HTTPS cada 10 s, que es lo que corre en la nube. Los precios en vivo no se guardan como respuestas crudas.
+- **2026-11-14 · Disparadores de VIGILAR.** Una vela de 5 minutos que cierra entre el piso de la zona de entrada y el precio de no perseguir, pasados los primeros 15 minutos. No se revisa volumen. Solo suben a COMPRAR las ideas que esperaban precio, expectativa, efectivo o espacio, y todo se recalcula con el precio y la cuenta de ese momento.
+- **2026-11-14 · IA sobre posiciones.** Solo con un motivo (noticia, movimiento de 1.5 ATR, cerca del stop o del objetivo, revisión de cierre) y una vez al día por motivo. Su respuesta se vuelve una alerta, nunca una acción; no puede bajar un stop ni proponer uno que no esté en su dossier. Una noticia grave según las reglas alerta aunque la IA opine distinto.
+- **2026-11-14 · Telegram.** Solo obedece al chat de `TELEGRAM_CHAT_ID`. "La compré" y "Vendí" preguntan precio y cantidad por el chat (el formulario llega con el dashboard). Las respuestas se leen por consulta periódica, sin webhook.
+- **2026-11-14 · Programador.** Un proceso aparte (`make worker`) con APScheduler en hora de Nueva York. Cada tarea del día corre una vez y lo que ya corrió queda en la base: un reinicio no repite ni salta tareas. Una tarea que falla se reintenta hasta 3 veces y avisa por Telegram.
+
 ## Comandos
 
 Desde la raíz del repo (requiere `uv` y `make`):
@@ -84,6 +92,8 @@ Desde la raíz del repo (requiere `uv` y `make`):
 - `make lint`: revisa estilo y errores comunes con ruff.
 - `make migrate`: crea o actualiza la base de datos.
 - `make dev`: levanta la API en http://127.0.0.1:8000 con recarga automática.
+- `make worker`: levanta el programador y el vigilante (tareas del día, precios en vivo, alertas y Telegram).
+- `make telegram-test`: envía un mensaje de prueba al chat de Telegram configurado.
 - `make check`: prueba cada fuente de datos con una llamada real y muestra estado y latencia.
 - `make data`: descarga el universo, 2 años de barras diarias y los datos macro (tarda varios minutos).
 - `make replay FROM=2026-05-01 TO=2026-10-30`: corre el sistema sobre días pasados con reloj simulado y deja un reporte en `runs/replay/`. Con `AI=simulated` los finalistas pasan por la IA simulada.

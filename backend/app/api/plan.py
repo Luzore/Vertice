@@ -1,11 +1,12 @@
 """The plan of the day, the account and the manual confirmations.
 
 The system never sends an order (principle 1). These endpoints only record what
-the user says they did: "la compré", "no la compré", "vendí".
+the user says they did: "la compré", "no la compré", "vendí", "ya subí el stop".
 """
 
 from __future__ import annotations
 
+import json
 from datetime import date, datetime
 
 from fastapi import APIRouter, HTTPException
@@ -13,10 +14,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from collectors.health import data_health
-from core import clock, settings
+from core import clock, market_calendar, settings
 from db import models
 from db.session import get_engine, session_scope
 from engine import account, confirmations, plan_store, states
+from engine import watcher as watching
 from engine.ai_gateway import DatabaseLedger, budget_status
 
 router = APIRouter()
@@ -41,6 +43,13 @@ class Sale(BaseModel):
     filled_at: datetime | None = None
     commission: float = Field(default=0.0, ge=0)
     reason: str | None = Field(default=None, description="stop, objetivo, tiempo, ...")
+    note: str | None = None
+    alert_id: int | None = Field(default=None, description="La alerta que esta venta responde")
+
+
+class StopRaise(BaseModel):
+    new_stop: float | None = Field(default=None, gt=0, description="Por defecto, el sugerido")
+    alert_id: int | None = None
     note: str | None = None
 
 
@@ -69,6 +78,8 @@ def _position(position: models.Position, fills: list[models.Fill], last: float |
         "ticker": position.ticker,
         "is_shadow": position.is_shadow,
         "state": position.state,
+        # A sell alert the user has not answered: the system never assumes a sale.
+        "pending_confirmation": position.state == "SELL_ALERT",
         "qty_open": position.qty_open,
         "avg_price": position.avg_price,
         "stop": position.stop,
@@ -163,9 +174,29 @@ def system_status() -> dict:
         portfolio = account.load_portfolio(session, config)
         brake = account.current_brake(session, config, portfolio, account.load_history(session))
         problems = [*health.problems, *(row.message for row in incidents)]
+        # Daily tasks that failed, and the live price feed while the market is open.
+        failed = session.scalars(
+            select(models.SystemStatus).where(
+                models.SystemStatus.component.startswith("job/"),
+                models.SystemStatus.status == "error",
+            )
+        ).all()
+        problems += [
+            f"Falló la tarea {row.component.removeprefix('job/')}: "
+            f"{(json.loads(row.message or '{}')).get('detail')}"
+            for row in failed
+        ]
+        feed = session.get(models.SystemStatus, "watcher/feed")
+        feed_down = (
+            feed is not None
+            and feed.status != "ok"
+            and market_calendar.market_status(clock.now()) == "open"
+        )
+        if feed_down:
+            problems.append(f"Sin precios en vivo para el vigilante: {feed.message}")
         if brake.state == "PAUSA":
             state = "PAUSA"
-        elif incidents or health.state == "PRECAUCION":
+        elif incidents or failed or feed_down or health.state == "PRECAUCION":
             state = "PRECAUCION"
         elif brake.state == "SOLO_VIGILAR" or config.system.mode != "recommend":
             state = "SOLO_VIGILAR"
@@ -230,6 +261,54 @@ def sold(position_id: int, body: Sale) -> dict:
     """ "Vendí": a partial or total sale of a real position."""
     with states.guarded_session(get_engine()) as session:
         position = confirmations.confirm_sold(session, position_id, **body.model_dump())
+        session.flush()
+        fills = account.fills_of(session, [position.id]).get(position.id, [])
+        return {"position": _position(position, fills, None)}
+
+
+@router.get("/alerts")
+def alerts(include_resolved: bool = False) -> dict:
+    """Sell alerts. By default only the ones still waiting for an answer."""
+    with session_scope(get_engine()) as session:
+        query = select(models.Alert).order_by(models.Alert.id.desc())
+        if not include_resolved:
+            query = query.where(models.Alert.resolved_at.is_(None))
+        return {
+            "alerts": [
+                {
+                    "id": alert.id,
+                    "position_id": alert.position_id,
+                    "rule": alert.rule,
+                    "rule_name": watching.RULES[alert.rule].name,
+                    "urgency": alert.urgency,
+                    "message": alert.message,
+                    "data": alert.data,
+                    "created_at": alert.created_at.isoformat(),
+                    "created_at_label": clock.dual_label(alert.created_at),
+                    "resolved_at": alert.resolved_at.isoformat() if alert.resolved_at else None,
+                    "resolution": alert.resolution,
+                    "notified_count": alert.notified_count,
+                }
+                for alert in session.scalars(query.limit(200))
+            ]
+        }
+
+
+@router.post("/alerts/{alert_id}/ignore")
+def ignore_alert(alert_id: int, body: Decline | None = None) -> dict:
+    """ "Ignorar (motivo)": the position stays as it is."""
+    body = body or Decline()
+    with states.guarded_session(get_engine()) as session:
+        alert = confirmations.ignore_alert(session, alert_id, **body.model_dump())
+        return {"alert": {"id": alert.id, "resolution": alert.resolution}}
+
+
+@router.post("/positions/{position_id}/stop-raised")
+def stop_raised(position_id: int, body: StopRaise | None = None) -> dict:
+    """ "Ya subí el stop": the stop moves up, never down."""
+    body = body or StopRaise()
+    with states.guarded_session(get_engine()) as session:
+        position = confirmations.confirm_stop_raised(session, position_id, **body.model_dump())
         session.flush()
         fills = account.fills_of(session, [position.id]).get(position.id, [])
         return {"position": _position(position, fills, None)}

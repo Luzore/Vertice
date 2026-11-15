@@ -485,3 +485,73 @@ def test_an_answered_alert_cannot_be_answered_again(engine, position_id, path):
         confirmations.ignore_alert(session, alert_id)
     with pytest.raises(confirmations.NotFound), session_scope(engine) as session:
         confirmations.ignore_alert(session, 999_999)
+
+
+# --- endpoints ---------------------------------------------------------------------------------
+
+
+@pytest.fixture
+def client(position_id, db_url, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from app.main import create_app
+
+    monkeypatch.setenv("DATABASE_URL", db_url)
+    with TestClient(create_app()) as test_client:
+        yield test_client
+
+
+def test_alerts_and_their_answers_through_the_api(engine, position_id, path, client):
+    assert client.get("/api/alerts").json() == {"alerts": []}
+    path.run(52.8)  # the trailing stop asks for 50.30
+    path.run(48.2)  # and then the price falls through the stop
+
+    listed = client.get("/api/alerts").json()["alerts"]
+    assert [(a["rule"], a["urgency"]) for a in listed] == [("stop", "ALTA"), ("stop_movil", "BAJA")]
+    assert listed[0]["rule_name"] == "Stop" and listed[0]["data"]["action"] == "Vender todo ya"
+    (held,) = client.get("/api/positions").json()["positions"]
+    assert (held["state"], held["pending_confirmation"]) == ("SELL_ALERT", True)
+
+    stop, trailing = listed
+    ignored = client.post(f"/api/alerts/{stop['id']}/ignore", json={"reason": "fue un pico"})
+    assert ignored.json()["alert"]["resolution"] == "ignorada: fue un pico"
+    raised = client.post(
+        f"/api/positions/{position_id}/stop-raised", json={"alert_id": trailing["id"]}
+    )
+    assert raised.json()["position"]["stop"] == 50.3
+    assert client.get("/api/alerts").json() == {"alerts": []}
+    assert len(client.get("/api/alerts", params={"include_resolved": True}).json()["alerts"]) == 2
+    (held,) = client.get("/api/positions").json()["positions"]
+    assert (held["state"], held["pending_confirmation"]) == ("OPEN", False)
+
+    lower = client.post(f"/api/positions/{position_id}/stop-raised", json={"new_stop": 49.0})
+    assert lower.status_code == 422 and "el stop solo sube" in lower.json()["detail"]
+    assert client.post("/api/alerts/999/ignore").status_code == 404
+
+
+def test_sold_through_the_api_answers_its_alert(engine, position_id, path, client):
+    path.run(48.2)
+    (alert,) = client.get("/api/alerts").json()["alerts"]
+
+    sold = client.post(
+        f"/api/positions/{position_id}/sold",
+        json={"price": 48.25, "qty": 10, "alert_id": alert["id"]},
+    )
+
+    assert sold.json()["position"]["state"] == "CLOSED"
+    assert client.get("/api/alerts").json() == {"alerts": []}
+
+
+def test_a_failed_daily_task_shows_in_the_system_status(engine, position_id, client):
+    with session_scope(engine) as session:
+        session.add(
+            models.SystemStatus(
+                component="job/premarket", status="error", updated_at=clock.now(),
+                message='{"day": "2026-11-10", "ok": false, "detail": "sin datos", "attempts": 3}',
+            )
+        )  # fmt: skip
+
+    status = client.get("/api/status").json()
+
+    assert status["state"] == "PRECAUCION"
+    assert "Falló la tarea premarket: sin datos" in status["problems"]
