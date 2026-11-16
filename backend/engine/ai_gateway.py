@@ -315,6 +315,7 @@ class AIGateway:
         "position_review": ("position_review", "position_review"),
         "news_classifier": ("news_classifier", "news_classification"),
         "lesson_writer": ("lesson_writer", "lesson_writer"),
+        "explain": ("explain", "explain"),
     }
 
     def model_for(self, task: str) -> str:

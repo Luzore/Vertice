@@ -6,22 +6,21 @@ the user says they did: "la compré", "no la compré", "vendí", "ya subí el st
 
 from __future__ import annotations
 
-import json
 from datetime import date, datetime
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
-from collectors.health import data_health
-from core import clock, market_calendar, settings
+from app import auth
+from core import clock
 from db import models
 from db.session import get_engine, session_scope
-from engine import account, confirmations, plan_store, states
+from engine import account, confirmations, overview, plan_store, runtime_config, states
 from engine import watcher as watching
 from engine.ai_gateway import DatabaseLedger, budget_status
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(auth.require_session)])
 
 
 class Purchase(BaseModel):
@@ -139,7 +138,7 @@ def positions(shadow: bool = False, include_closed: bool = False) -> dict:
 @router.get("/account")
 def account_summary() -> dict:
     """Cash, capital, result of the day and of the week, brake and AI budget."""
-    config = settings.get_config()
+    config = runtime_config.current(get_engine())
     engine = get_engine()
     with session_scope(engine) as session:
         portfolio = account.load_portfolio(session, config)
@@ -166,56 +165,12 @@ def account_summary() -> dict:
 
 @router.get("/status")
 def system_status() -> dict:
-    """The state the banner shows: NORMAL, PRECAUCION, SOLO_VIGILAR or PAUSA, and why."""
-    config = settings.get_config()
-    with session_scope(get_engine()) as session:
-        health = data_health(session, config.data)
-        incidents = states.open_incidents(session)
-        portfolio = account.load_portfolio(session, config)
-        brake = account.current_brake(session, config, portfolio, account.load_history(session))
-        problems = [*health.problems, *(row.message for row in incidents)]
-        # Daily tasks that failed, and the live price feed while the market is open.
-        failed = session.scalars(
-            select(models.SystemStatus).where(
-                models.SystemStatus.component.startswith("job/"),
-                models.SystemStatus.status == "error",
-            )
-        ).all()
-        problems += [
-            f"Falló la tarea {row.component.removeprefix('job/')}: "
-            f"{(json.loads(row.message or '{}')).get('detail')}"
-            for row in failed
-        ]
-        feed = session.get(models.SystemStatus, "watcher/feed")
-        feed_down = (
-            feed is not None
-            and feed.status != "ok"
-            and market_calendar.market_status(clock.now()) == "open"
-        )
-        if feed_down:
-            problems.append(f"Sin precios en vivo para el vigilante: {feed.message}")
-        if brake.state == "PAUSA":
-            state = "PAUSA"
-        elif incidents or failed or feed_down or health.state == "PRECAUCION":
-            state = "PRECAUCION"
-        elif brake.state == "SOLO_VIGILAR" or config.system.mode != "recommend":
-            state = "SOLO_VIGILAR"
-        else:
-            state = "NORMAL"
-        return {
-            "state": state,
-            "problems": problems,
-            "incidents": [
-                {
-                    "component": row.component,
-                    "message": row.message,
-                    "since": row.updated_at.isoformat(),
-                }
-                for row in incidents
-            ],
-            "brake": {"state": brake.state, "reasons": list(brake.reasons)},
-            "mode": config.system.mode,
-        }
+    """The state the banner shows (NORMAL, PRECAUCION, SOLO_VIGILAR, PAUSA, SIN_CUOTA_IA
+    or DATOS_CAIDOS), why, and what to do."""
+    engine = get_engine()
+    with session_scope(engine) as session:
+        state = overview.system_state(session, engine, runtime_config.current(session=session))
+    return {key: value for key, value in state.items() if not key.startswith("_")}
 
 
 @router.post("/status/incidents/resolve")
@@ -229,7 +184,7 @@ def resolve_incident(body: Resolution) -> dict:
 @router.post("/brakes/{name}/lift")
 def lift_brake(name: str, body: Note | None = None) -> dict:
     """Reactivate purchases after the weekly brake ("week") or the pause ("drawdown")."""
-    config = settings.get_config()
+    config = runtime_config.current(get_engine())
     with session_scope(get_engine()) as session:
         capital = account.load_portfolio(session, config).capital
         if not account.lift_brake(session, name, capital=capital, note=body.note if body else ""):

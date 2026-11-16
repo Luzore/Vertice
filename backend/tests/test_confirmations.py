@@ -6,10 +6,8 @@ from dataclasses import replace
 from datetime import date, time, timedelta
 
 import pytest
-from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from app.main import create_app
 from core import clock
 from db import models
 from db.session import session_scope
@@ -19,6 +17,7 @@ from engine.confirmations import ConfirmationError, NotFound
 from engine.portfolio import Portfolio
 from engine.recommender import build_plan
 from engine.states import InvalidTransition
+from tests.conftest import logged_in_client
 from tests.test_ai_analyst import analyst
 from tests.test_screener_plan import AS_OF, CONFIG, DAY, candidate, plan_for, state_and_indicators
 
@@ -828,8 +827,7 @@ def test_a_late_yes_on_a_shadowed_idea_cancels_the_shadow(engine, saved, _fixed_
 
 @pytest.fixture
 def client(saved, db_url, monkeypatch):
-    monkeypatch.setenv("DATABASE_URL", db_url)
-    with TestClient(create_app()) as test_client:
+    with logged_in_client(monkeypatch, db_url, keys=True) as test_client:
         yield test_client
 
 

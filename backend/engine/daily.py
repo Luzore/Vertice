@@ -24,7 +24,7 @@ from core.logging import configure_logging, get_logger
 from core.settings import AppConfig
 from db import models
 from db.session import make_engine, session_scope
-from engine import account, confirmations, exits, plan_store, risk, states
+from engine import account, confirmations, exits, plan_store, risk, runtime_config, states
 from engine.ai_analyst import Analyst, live_analyst, simulated_analyst
 from engine.data_engine import build_market_state, load_corporate_events
 from engine.indicators import compute_indicators
@@ -198,6 +198,16 @@ def run_close(engine: Engine, config: AppConfig, *, day: date | None = None) -> 
         fall = risk.drawdown_pct(history, equity)
         row = session.get(models.MetricsDaily, day) or models.MetricsDaily(day=day)
         row.equity_real = equity
+        # The system as if every idea had been followed: real trades plus shadows.
+        everything = [
+            p for p in session.scalars(select(models.Position)) if not account.is_voided(p)
+        ]
+        all_fills = account.fills_of(session, (p.id for p in everything))
+        row.equity_system = config.capital.cash_usd + sum(
+            account.net_result(all_fills.get(p.id, []))
+            + p.qty_open * prices.get(p.ticker, p.avg_price)
+            for p in everything
+        )
         row.spy_close = bars["SPY"].close if "SPY" in bars else None
         row.pnl = equity - previous if previous is not None else None
         row.drawdown = fall
@@ -229,11 +239,12 @@ def main(argv: list[str] | None = None) -> int:
         help="día del cierre o de la revisión (por defecto, hoy)",
     )
     args = parser.parse_args(argv)
-    config = settings.get_config()
     configure_logging(
         "WARNING", secret_values=settings.get_secrets().secret_values(), stream=sys.stderr
     )
     engine = make_engine()
+    # The file plus what was changed from the dashboard (mode, aggressiveness, cash...).
+    config = runtime_config.current(engine)
     try:
         if args.run == "premarket":
             analyst = None

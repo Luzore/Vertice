@@ -9,14 +9,14 @@ from app.api import status
 from app.main import create_app
 from core import clock
 from db import migrate
+from tests.conftest import logged_in_client
 
 
 @pytest.fixture
 def client(db_url, monkeypatch):
-    """The API running against a freshly migrated database and without any key."""
-    monkeypatch.setenv("DATABASE_URL", db_url)
-    migrate.upgrade(db_url)
-    with TestClient(create_app()) as test_client:
+    """The API running against a freshly migrated database, without any data key and
+    with a dashboard session open."""
+    with logged_in_client(monkeypatch, db_url) as test_client:
         yield test_client
 
 
@@ -92,9 +92,7 @@ def test_with_keys_no_source_is_marked_as_not_configured(db_url, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", db_url)
     for name, value in TEST_SECRETS.items():
         monkeypatch.setenv(name.upper(), value)
-    migrate.upgrade(db_url)
-
-    with TestClient(create_app()) as test_client:
+    with logged_in_client(monkeypatch, db_url) as test_client:
         body = test_client.get("/api/status/sources").json()
 
     assert {item["status"] for item in body["sources"]} == {"unknown"}

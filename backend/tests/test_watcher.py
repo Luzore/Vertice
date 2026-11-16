@@ -492,12 +492,9 @@ def test_an_answered_alert_cannot_be_answered_again(engine, position_id, path):
 
 @pytest.fixture
 def client(position_id, db_url, monkeypatch):
-    from fastapi.testclient import TestClient
+    from tests.conftest import logged_in_client
 
-    from app.main import create_app
-
-    monkeypatch.setenv("DATABASE_URL", db_url)
-    with TestClient(create_app()) as test_client:
+    with logged_in_client(monkeypatch, db_url, keys=True) as test_client:
         yield test_client
 
 

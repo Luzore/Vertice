@@ -5,10 +5,10 @@ from __future__ import annotations
 from zoneinfo import ZoneInfo
 
 from alembic.migration import MigrationContext
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from sqlalchemy import text
 
-from app import __version__
+from app import __version__, auth
 from collectors.health import data_health
 from core import clock, market_calendar, settings
 from core.logging import get_logger
@@ -56,7 +56,7 @@ def health() -> dict:
     }
 
 
-@router.get("/status/sources")
+@router.get("/status/sources", dependencies=[Depends(auth.require_session)])
 def sources() -> dict:
     """Health of every data source, and whether a critical one is down."""
     config = settings.get_config()

@@ -30,7 +30,7 @@ from core.logging import get_logger
 from core.settings import AppConfig
 from db import models
 from db.session import session_scope
-from engine import account, daily, exits, plan_store, states, watch_triggers
+from engine import account, daily, exits, plan_store, runtime_config, states, watch_triggers
 from engine import data_engine as de
 from engine import position_review as review
 from engine import watcher as watching
@@ -132,9 +132,19 @@ class Service:
         if self.bot is not None:
             await self.bot._say(text)  # noqa: SLF001 - the bot's own plain message
 
+    def refresh_config(self) -> None:
+        """Pick up what the user changed from the dashboard (mode, aggressiveness...)."""
+        config = runtime_config.current(self.engine)
+        if config != self.config:
+            self.config = config
+            self.watcher._config = config  # noqa: SLF001
+            if self.bot is not None:
+                self.bot._config = config  # noqa: SLF001
+
     async def run_due(self, now: datetime | None = None) -> list[str]:
         """Run every daily task whose time has come and that has not run today.
         Returns the names of the tasks that ran."""
+        self.refresh_config()
         now = now or clock.now()
         session = market_calendar.get_session(clock.market_date(now))
         if session is None:
@@ -303,6 +313,7 @@ class Service:
     async def watch_once(self, now: datetime | None = None) -> dict[str, int]:
         """One beat of the watcher: read new prices, apply the exit rules, check the
         watched ideas and send what is due. Does nothing outside the session."""
+        self.refresh_config()
         now = now or clock.now()
         report = {"ticks": 0, "alerts": 0, "promoted": 0, "sent": 0}
         if market_calendar.market_status(now) != "open":

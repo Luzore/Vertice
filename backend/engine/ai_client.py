@@ -340,11 +340,29 @@ def simulated_position_review(dossier: str) -> dict[str, Any]:
     }
 
 
+def simulated_explanation(dossier: str) -> dict[str, Any]:
+    block = next(
+        (b for b in extract_json_blocks(dossier) if isinstance(b, dict) and "ticker" in b), {}
+    )
+    verdict = str(block.get("veredicto", "")).replace("_", " ")
+    return {
+        "explicacion": (
+            f"IA simulada: {block.get('ticker', 'la idea')} quedó en {verdict} "
+            f"con un setup {block.get('setup')} y puntaje {block.get('puntaje')}."
+        ),
+        "conceptos": [
+            {"termino": "R", "significado": "lo que arriesgas por acción: entrada menos stop."}
+        ],
+        "que_vigilar": ["que el precio respete el stop del plan"],
+    }
+
+
 _SIMULATED_TASKS: dict[str, Callable[[str], dict[str, Any]]] = {
     TASK_ANALYST: simulated_analyst,
     TASK_NEWS: simulated_news,
     TASK_POSITION_REVIEW: simulated_position_review,
     TASK_LESSONS: lambda dossier: {"hipotesis": []},
+    TASK_EXPLAIN: simulated_explanation,
 }
 
 

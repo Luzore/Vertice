@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Explicación de una idea",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["explicacion", "conceptos", "que_vigilar"],
+  "properties": {
+    "explicacion": { "type": "string", "minLength": 1 },
+    "conceptos": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["termino", "significado"],
+        "properties": {
+          "termino": { "type": "string", "minLength": 1 },
+          "significado": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "que_vigilar": { "type": "array", "items": { "type": "string" } }
+  }
+}

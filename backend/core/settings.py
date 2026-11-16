@@ -397,6 +397,8 @@ class Secrets(BaseSettings):
     anthropic_api_key: SecretStr | None = None
     massive_api_key: SecretStr | None = None
     banxico_token: SecretStr | None = None
+    # The password of the dashboard. Without it nobody can log in.
+    dashboard_password: SecretStr | None = None
 
     @field_validator("*", mode="before")
     @classmethod

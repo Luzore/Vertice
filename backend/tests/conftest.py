@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import copy
 from pathlib import Path
 
@@ -122,6 +123,33 @@ def busy(market, monkeypatch):
     monkeypatch.setattr(daily, "compute_indicators", indicators_with_levels)
     monkeypatch.setattr(daily, "screen", breakouts)
     return market
+
+
+TEST_PASSWORD = "clave-de-prueba-del-dashboard"
+
+
+@contextlib.contextmanager
+def logged_in_client(monkeypatch: pytest.MonkeyPatch, db_url: str, *, keys: bool = False):
+    """The API on the test database, with the dashboard password set and a session
+    open. With ``keys`` every data source has its (fake) credentials, so none of them
+    counts as down."""
+    from fastapi.testclient import TestClient
+
+    from app import auth
+    from app.main import create_app
+
+    monkeypatch.setenv("DATABASE_URL", db_url)
+    if keys:
+        for name, value in TEST_SECRETS.items():
+            monkeypatch.setenv(name.upper(), value)
+    monkeypatch.setenv("DASHBOARD_PASSWORD", TEST_PASSWORD)
+    settings.reset_caches()
+    db_session.get_engine.cache_clear()
+    auth.reset_failures()
+    migrate.upgrade(db_url)
+    with TestClient(create_app()) as client:
+        assert client.post("/api/login", json={"password": TEST_PASSWORD}).status_code == 200
+        yield client
 
 
 # --- collectors ---------------------------------------------------------------------
